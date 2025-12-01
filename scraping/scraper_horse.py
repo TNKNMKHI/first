@@ -28,8 +28,9 @@ def get_driver():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080") # ウィンドウサイズを指定
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -74,23 +75,28 @@ def parse_pedigree(soup):
     if not table:
         return {}
 
-    # tdタグを全て取得
-    tds = table.select('td')
+    # 父ID (f_id) の取得強化
+    # 父は通常 rowspan="32" のtd内にある
+    f_id = None
+    father_td = table.select_one('td[rowspan="32"]')
+    if father_td:
+        a_tag = father_td.select_one('a')
+        if a_tag and 'href' in a_tag.attrs:
+            m = re.search(r'/horse/(\d+)', a_tag['href'])
+            if m:
+                f_id = m.group(1)
     
-    # 抽出された馬IDのリスト
-    extracted_ids = []
-    for td in tds:
-        a_tag = td.select_one('a')
-        if a_tag and 'href' in a_tag.attrs and '/horse/' in a_tag['href']:
-            try:
-                horse_id = re.search(r'/horse/(\d+)', a_tag['href']).group(1)
-                extracted_ids.append(horse_id)
-            except:
-                extracted_ids.append(None)
-        else:
-            extracted_ids.append(None) # 情報なし
-            
-    f_id = extracted_ids[0] if len(extracted_ids) > 0 else None
+    # バックアップ: もしrowspanで見つからなければ、最初の有効なリンクを採用
+    if not f_id:
+        tds = table.select('td')
+        for td in tds:
+            a_tag = td.select_one('a')
+            if a_tag and 'href' in a_tag.attrs and '/horse/' in a_tag['href']:
+                m = re.search(r'/horse/(\d+)', a_tag['href'])
+                if m:
+                    f_id = m.group(1)
+                    break # 最初に見つかったものを父とする
+
     return {'f_id': f_id} 
 
 def parse_horse_page(soup, horse_id):
@@ -115,7 +121,7 @@ def parse_horse_page(soup, horse_id):
                         birth_year = int(m.group(1))
                     
                 if th == '性別':
-                    sex = td 
+                    sex = td.strip() 
                     
         pedigree_data = parse_pedigree(soup)
         
@@ -156,10 +162,17 @@ def scrape_missing_horses(driver):
     ids = get_unscraped_horse_ids()
     print(f"Found {len(ids)} horses to scrape.")
     
+    # デバッグ: 1頭だけ処理
+    ids = ids[:1]
+    
     for hid in tqdm(ids):
         html = get_html_with_selenium(driver, hid)
         if not html: continue
         
+        # デバッグ: HTMLを保存
+        with open('debug_horse.html', 'w', encoding='utf-8') as f:
+            f.write(html)
+            
         soup = BeautifulSoup(html, 'lxml')
         data = parse_horse_page(soup, hid)
         

@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-DB_PATH = 'keiba.db'
+DB_PATH = r'C:\Users\T123085\github\horseRacing\first\keiba.db'
 
 def generate_pedigree_columns():
     """5代血統までのカラム名を生成する"""
