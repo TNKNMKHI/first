@@ -8,37 +8,60 @@ from tqdm import tqdm
 import traceback
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
+import os
+
+# Selenium imports
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
 # SSL警告を抑制
 urllib3.disable_warnings(InsecureRequestWarning)
 
-DB_PATH = '/DB/keiba.db'
+DB_PATH = r'C:\Users\T123085\github\horseRacing\first\keiba.db'
 BASE_URL = "https://db.netkeiba.com/race/"
 
-def get_page(race_id):
-    """指定されたrace_idのページを取得する"""
+def get_driver():
+    """Selenium WebDriverを初期化して返す"""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless") # ヘッドレスモード
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled") # 自動操作フラグを隠す
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    # WebDriver Managerでドライバを自動取得・設定
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
+
+def get_html_with_selenium(driver, race_id):
+    """Seleniumを使ってページを取得しHTMLを返す"""
     url = f"{BASE_URL}{race_id}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://db.netkeiba.com/"
-    }
     try:
-        # verify=Falseを追加
-        response = requests.get(url, headers=headers, verify=False)
-        response.encoding = 'euc-jp' # netkeibaの文字コード
-        if response.status_code == 200:
-            return response.text
-        else:
-            print(f"Status Code: {response.status_code} for {url}")
+        driver.get(url)
+        time.sleep(1) # ページ読み込み待機 + 負荷軽減
+        
+        # タイトルに "エラー" が含まれていないかチェック
+        if "エラー" in driver.title or "ご指定のページは見つかりませんでした" in driver.page_source:
             return None
+            
+        return driver.page_source
     except Exception as e:
-        print(f"Error fetching {url}: {e}")
+        print(f"Error fetching {url} with Selenium: {e}")
         return None
 
 def parse_race_info(soup, race_id):
     """レース情報を解析して辞書で返す"""
     try:
-        title = soup.select_one('h1').text.strip() if soup.select_one('h1') else ""
+        # レース名: div.data_intro 内の h1 を探す
+        race_name_elem = soup.select_one('div.data_intro h1')
+        if not race_name_elem:
+            # バックアッププラン: 単純に h1
+            race_name_elem = soup.select_one('h1')
+            
+        title = race_name_elem.text.strip() if race_name_elem else ""
         
         # レース詳細 (R, 距離, 天候など) が含まれるエリア
         data_intro = soup.select_one('.data_intro')
@@ -66,10 +89,10 @@ def parse_race_info(soup, race_id):
         elif "左" in details: rotation = "左"
         elif "直線" in details: rotation = "直線"
         
-        weather_match = re.search(r'天候 : (.*?)( /|$)', details)
+        weather_match = re.search(r'天候\s*:\s*(.*?)(/|$)', details)
         weather = weather_match.group(1).strip() if weather_match else ""
         
-        state_match = re.search(r'(芝|ダート) : (.*?)( /|$)', details)
+        state_match = re.search(r'(芝|ダート|障害)\s*:\s*(.*?)(/|$)', details)
         state = state_match.group(2).strip() if state_match else ""
         
         date_text = data_intro.select_one('.smalltxt').text.strip().split(' ')[0]
@@ -115,7 +138,7 @@ def parse_race_results(soup, race_id):
             
             # 抽出処理
             rank_text = cols[0].text.strip()
-            if not rank_text.isdigit(): continue # 失格・除外などは一旦スキップ(必要ならハンドリング追加)
+            if not rank_text.isdigit(): continue # 失格・除外などは一旦スキップ
             rank = int(rank_text)
             
             frame_no = int(cols[1].text.strip())
@@ -143,16 +166,11 @@ def parse_race_results(soup, race_id):
                     m, s = time_str.split(':')
                     time_seconds = int(m) * 60 + float(s)
                 else:
-                    time_seconds = float(time_str) # 秒のみの場合や無効値対策が必要
+                    time_seconds = float(time_str)
             except:
                 time_seconds = None
             
             margin = cols[8].text.strip()
-            
-            # 通過順, 上がり, オッズ, 人気, 馬体重, 調教師...
-            # サイトのカラム位置は固定だが、念のため確認が必要。
-            # netkeiba dbページの標準的な並び:
-            # 着順, 枠, 馬番, 馬名, 性齢, 斤量, 騎手, タイム, 着差, 人気, 単勝オッズ, 後3F, コーナー通過, 厩舎(調教師), 馬体重
             
             popularity = cols[9].text.strip()
             popularity = int(popularity) if popularity.isdigit() else None
@@ -171,7 +189,6 @@ def parse_race_results(soup, race_id):
             trainer_id = re.search(r'/trainer/result/recent/(\d+)', trainer_a['href']).group(1) if trainer_a else ""
             
             weight_text = cols[14].text.strip()
-            # 例: 480(+2)
             hw_match = re.search(r'(\d+)\((.*?)\)', weight_text)
             horse_weight = int(hw_match.group(1)) if hw_match else None
             weight_diff_str = hw_match.group(2) if hw_match else "0"
@@ -213,11 +230,12 @@ def save_to_db(race_info, results):
     if not race_info or not results:
         return
     
+    # 相対パス対応: スクリプトのディレクトリとDBのパスを適切に結合するか、絶対パスを使う
+    # ここでは簡易的に現在のカレントディレクトリにあると仮定（実行時に注意）
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
-        # Race
         cursor.execute('''
         INSERT OR IGNORE INTO races (race_id, date, venue, race_name, race_round, course_type, distance, rotation, weather, state, entries)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -227,7 +245,6 @@ def save_to_db(race_info, results):
             race_info['rotation'], race_info['weather'], race_info['state'], len(results)
         ))
         
-        # Results
         for res in results:
             cursor.execute('''
             INSERT OR IGNORE INTO results (race_id, horse_id, rank, frame_no, horse_no, jockey_id, trainer_id, age, sex, weight, time_seconds, margin, passing, last_3f, odds, popularity, horse_weight, weight_diff)
@@ -245,144 +262,75 @@ def save_to_db(race_info, results):
     finally:
         conn.close()
 
-def scrape_year(year):
+def scrape_year(year, driver):
     """指定した年の全レースをスクレイピングする"""
     print(f"Starting scrape for year {year}...")
     
-    # 競馬場コード: 01-10
     for place in range(1, 11):
         place_id = f"{place:02}"
         print(f"Scraping place {place_id}...")
         
-        for kai in range(1, 7): # 開催回 (通常最大5,6回)
+        for kai in range(1, 7): 
             kai_id = f"{kai:02}"
             
-            for day in range(1, 13): # 日数 (通常最大12日)
+            for day in range(1, 13): 
                 day_id = f"{day:02}"
-                
-                # この日のレースが存在するか確認するために1Rだけチェックしても良いが、
-                # 途中抜け（中止など）もあり得るので、全ラウンド回すのが確実。
-                # ただし、1Rが存在しなければその日(またはその開催回)は終了の可能性が高い。
-                
                 consecutive_failures = 0
                 
-                for r in range(1, 13): # 1-12R
+                for r in range(1, 13):
                     r_id = f"{r:02}"
                     race_id = f"{year}{place_id}{kai_id}{day_id}{r_id}"
                     
-                    # DBに既に存在するかチェックしてスキップするロジックを入れると再開時に便利
-                    # ここでは簡易化のため省略(INSERT OR IGNOREで対応)
-                    
-                    html = get_page(race_id)
-                    time.sleep(1) # Wait
+                    html = get_html_with_selenium(driver, race_id)
                     
                     if not html:
                         consecutive_failures += 1
                         continue
                         
-                    soup = BeautifulSoup(html, 'lxml') # lxmlパーサーを使用
+                    soup = BeautifulSoup(html, 'lxml')
                     race_info = parse_race_info(soup, race_id)
                     
                     if not race_info:
                         consecutive_failures += 1
-                        continue # 情報が取れないページ
+                        continue 
                     
-                    consecutive_failures = 0 # 成功したらリセット
+                    consecutive_failures = 0 
                     
                     results = parse_race_results(soup, race_id)
                     save_to_db(race_info, results)
                     print(f"Saved {race_id}: {race_info['race_name']}")
                 
-                # 1Rから12Rまで全部失敗したら、その開催回の日数は終了とみなして次の開催回へ
                 if consecutive_failures >= 12:
-                     # print(f"No races found for {year}-{place_id}-{kai_id}-{day_id}. Skipping to next kai.")
                      break
-            
-            # 1日目すら存在しなければ、その開催回は終了とみなして次の場所へ？
-            # NOTE: 開催回が飛ぶことは稀だが、場所ごとにループしているので、
-            # ここでのbreak判定は「その開催回の1日目もデータがない場合」にするなど工夫が必要。
-            # 今回は全探索気味にループさせる（無駄なリクエストも走るが安全）
 
 if __name__ == "__main__":
-    # ダミーデータによるDB保存テスト
-    print("Starting dummy data test...")
-    
-    dummy_race_info = {
-        'race_id': '209901010101',
-        'date': '2099-01-01',
-        'venue': '東京',
-        'race_name': 'テスト記念',
-        'race_round': 11,
-        'course_type': '芝',
-        'distance': 2400,
-        'rotation': '左',
-        'weather': '晴',
-        'state': '良',
-        'entries': 16
-    }
-    
-    dummy_results = [
-        {
-            'race_id': '209901010101',
-            'horse_id': '2020123456',
-            'rank': 1,
-            'frame_no': 1,
-            'horse_no': 1,
-            'jockey_id': '00001',
-            'trainer_id': '00001',
-            'age': 3,
-            'sex': '牡',
-            'weight': 56.0,
-            'time_seconds': 145.5,
-            'margin': '0.0',
-            'passing': '2-2-2',
-            'last_3f': 34.5,
-            'odds': 2.5,
-            'popularity': 1,
-            'horse_weight': 500,
-            'weight_diff': 2
-        },
-        {
-            'race_id': '209901010101',
-            'horse_id': '2020654321',
-            'rank': 2,
-            'frame_no': 2,
-            'horse_no': 2,
-            'jockey_id': '00002',
-            'trainer_id': '00002',
-            'age': 4,
-            'sex': '牝',
-            'weight': 54.0,
-            'time_seconds': 145.6,
-            'margin': 'クビ',
-            'passing': '1-1-1',
-            'last_3f': 35.0,
-            'odds': 5.0,
-            'popularity': 2,
-            'horse_weight': 460,
-            'weight_diff': -4
-        }
-    ]
+    print("Initializing Selenium Driver...")
+    driver = get_driver()
     
     try:
-        save_to_db(dummy_race_info, dummy_results)
-        print("Dummy data saved successfully.")
+        # テスト実行: 2023年有馬記念
+        test_race_id = "202306050911"
+        print(f"Testing with {test_race_id}...")
         
-        # 保存確認
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        html = get_html_with_selenium(driver, test_race_id)
         
-        print("\n--- Races Table ---")
-        for row in cursor.execute("SELECT * FROM races WHERE race_id='209901010101'"):
-            print(row)
+        if html:
+            soup = BeautifulSoup(html, 'lxml')
+            info = parse_race_info(soup, test_race_id)
+            results = parse_race_results(soup, test_race_id)
             
-        print("\n--- Results Table ---")
-        for row in cursor.execute("SELECT * FROM results WHERE race_id='209901010101'"):
-            print(row)
+            print(f"Info: {info}")
+            print(f"Results count: {len(results)}")
             
-        conn.close()
-        
+            if info and results:
+                save_to_db(info, results)
+                print("Saved to DB.")
+        else:
+            print("Failed to fetch page.")
+            
     except Exception as e:
-        print(f"Error saving dummy data: {e}")
+        print(f"Error: {e}")
         traceback.print_exc()
-
+    finally:
+        print("Closing driver...")
+        driver.quit()

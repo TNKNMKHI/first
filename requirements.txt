@@ -6,3 +6,5 @@ lxml
 scikit-learn
 lightgbm
 tqdm
+selenium
+webdriver-manager
