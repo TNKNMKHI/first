@@ -8,3 +8,4 @@ lightgbm
 tqdm
 selenium
 webdriver-manager
+python-dotenv
