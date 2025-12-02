@@ -6,6 +6,7 @@ import re
 from tqdm import tqdm
 import traceback
 import os
+from dotenv import load_dotenv
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -18,8 +19,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 # SSL警告を抑制
 urllib3.disable_warnings(InsecureRequestWarning)
 
-# 絶対パス指定
-DB_PATH = r'C:\Users\T123085\github\horseRacing\first\keiba.db'
+# .env読み込み
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+DB_PATH = os.getenv('DB_FILE_PATH')
+if not DB_PATH:
+    raise ValueError("DB_FILE_PATH is not set in .env file")
+
 BASE_URL = "https://db.netkeiba.com/horse/"
 
 def get_driver():
@@ -41,7 +46,8 @@ def get_html_with_selenium(driver, horse_id):
     url = f"{BASE_URL}{horse_id}"
     try:
         driver.get(url)
-        time.sleep(1)
+        # JavaScriptの読み込み待ち時間を延長
+        time.sleep(5)
         
         if "エラー" in driver.title or "ご指定のページは見つかりませんでした" in driver.page_source:
             return None

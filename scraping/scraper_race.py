@@ -9,6 +9,7 @@ import traceback
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 import os
+from dotenv import load_dotenv
 
 # Selenium imports
 from selenium import webdriver
@@ -19,7 +20,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 # SSL警告を抑制
 urllib3.disable_warnings(InsecureRequestWarning)
 
-DB_PATH = r'C:\Users\T123085\github\horseRacing\first\keiba.db'
+# .env読み込み
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+DB_PATH = os.getenv('DB_FILE_PATH')
+if not DB_PATH:
+    raise ValueError("DB_FILE_PATH is not set in .env file")
+
 BASE_URL = "https://db.netkeiba.com/race/"
 
 def get_driver():

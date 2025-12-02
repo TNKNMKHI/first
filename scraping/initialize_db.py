@@ -1,7 +1,14 @@
 import sqlite3
 import os
+from dotenv import load_dotenv
 
-DB_PATH = r'C:\Users\T123085\github\horseRacing\first\keiba.db'
+# .envファイルを読み込む
+# スクリプトのディレクトリの親ディレクトリ(ルート)にある.envを探す
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
+DB_PATH = os.getenv('DB_FILE_PATH')
+if not DB_PATH:
+    raise ValueError("DB_FILE_PATH is not set in .env file")
 
 def generate_pedigree_columns():
     """5代血統までのカラム名を生成する"""
