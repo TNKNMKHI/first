@@ -72,6 +72,22 @@
 | ... | ... | ... | (3代〜5代も同様にカラム展開。計62カラム) |
 | `mmmmm_id` | TEXT | 5代母母 | |
 
+#### `jockeys` テーブル (騎手情報)
+騎手の基本情報。
+| カラム名 | 型 | 説明 | 備考 |
+| :--- | :--- | :--- | :--- |
+| `jockey_id` | TEXT | 騎手ID | **PK** |
+| `name` | TEXT | 騎手名 | |
+| `belonging` | TEXT | 所属 | 栗東 or 美浦 |
+| `birth_date` | TEXT | 生年月日 | ISO8601形式 (YYYY-MM-DD) |
+| `first` | INTEGER | 通算勝利数 | １着回数 |
+| `second` | INTEGER | 通算２着数 | ２着回数 |
+| `third` | INTEGER | 通算３着数 | ３着回数 |
+| `career_races` | INTEGER | 通算出走数 | |
+
+
+
+
 ## 3. 開発フロー
 
 ### Phase 1: データ収集基盤の構築
