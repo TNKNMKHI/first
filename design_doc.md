@@ -19,6 +19,7 @@
 | `race_id` | TEXT | レースID | **PK** (例: `202406010101`) |
 | `date` | TEXT | 開催日 | ISO8601形式 (YYYY-MM-DD) |
 | `venue` | TEXT | 開催場所 | 例: 中山 |
+| `race_class` | TEXT | レースクラス | 例: G1, G2, OP, 3勝C |
 | `race_name` | TEXT | レース名 | |
 | `race_round` | INTEGER | ラウンド | 例: 11 |
 | `course_type` | TEXT | コース種別 | 芝/ダート/障害 |
