@@ -268,13 +268,30 @@ def save_to_db(race_info, results):
     finally:
         conn.close()
 
+import argparse
+
+# ... (中略) ...
+
+def get_existing_race_ids(year):
+    """指定した年の既に保存されているレースIDのセットを返す"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # race_idは文字列なので、先頭が year と一致するものを取得
+    cursor.execute("SELECT race_id FROM races WHERE race_id LIKE ?", (f'{year}%',))
+    ids = set(row[0] for row in cursor.fetchall())
+    conn.close()
+    return ids
+
 def scrape_year(year, driver):
     """指定した年の全レースをスクレイピングする"""
     print(f"Starting scrape for year {year}...")
     
+    # 既存データの取得
+    existing_ids = get_existing_race_ids(year)
+    print(f"Found {len(existing_ids)} existing races in DB. These will be skipped.")
+    
     for place in range(1, 11):
         place_id = f"{place:02}"
-        print(f"Scraping place {place_id}...")
         
         for kai in range(1, 7): 
             kai_id = f"{kai:02}"
@@ -286,6 +303,11 @@ def scrape_year(year, driver):
                 for r in range(1, 13):
                     r_id = f"{r:02}"
                     race_id = f"{year}{place_id}{kai_id}{day_id}{r_id}"
+                    
+                    # スキップ判定
+                    if race_id in existing_ids:
+                        print(f"Skipping {race_id}: Already exists.")
+                        continue
                     
                     html = get_html_with_selenium(driver, race_id)
                     
@@ -307,32 +329,21 @@ def scrape_year(year, driver):
                     print(f"Saved {race_id}: {race_info['race_name']}")
                 
                 if consecutive_failures >= 12:
+                     # その日のレースが全滅なら、その開催回の日程は終了している可能性が高い
+                     # print(f"Skipping remaining days for kai {kai_id} at place {place_id}")
                      break
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Scrape race data from netkeiba')
+    parser.add_argument('year', type=int, help='Year to scrape (e.g., 2023)')
+    args = parser.parse_args()
+
     print("Initializing Selenium Driver...")
     driver = get_driver()
     
     try:
-        # テスト実行: 2023年有馬記念
-        test_race_id = "202306050911"
-        print(f"Testing with {test_race_id}...")
-        
-        html = get_html_with_selenium(driver, test_race_id)
-        
-        if html:
-            soup = BeautifulSoup(html, 'lxml')
-            info = parse_race_info(soup, test_race_id)
-            results = parse_race_results(soup, test_race_id)
-            
-            print(f"Info: {info}")
-            print(f"Results count: {len(results)}")
-            
-            if info and results:
-                save_to_db(info, results)
-                print("Saved to DB.")
-        else:
-            print("Failed to fetch page.")
+        scrape_year(args.year, driver)
+        print("Scraping completed.")
             
     except Exception as e:
         print(f"Error: {e}")
