@@ -49,6 +49,7 @@ def create_tables():
         race_id TEXT PRIMARY KEY,
         date TEXT,
         venue TEXT,
+        race_class TEXT,
         race_name TEXT,
         race_round INTEGER,
         course_type TEXT,
@@ -71,7 +72,6 @@ def create_tables():
         jockey_id TEXT,
         trainer_id TEXT,
         age INTEGER,
-        sex TEXT,
         weight REAL,
         time_seconds REAL,
         margin TEXT,
@@ -82,7 +82,10 @@ def create_tables():
         horse_weight INTEGER,
         weight_diff INTEGER,
         PRIMARY KEY (race_id, horse_id),
-        FOREIGN KEY (race_id) REFERENCES races (race_id)
+        FOREIGN KEY (race_id) REFERENCES races (race_id),
+        FOREIGN KEY (horse_id) REFERENCES horses (horse_id),
+        FOREIGN KEY (jockey_id) REFERENCES jockeys (jockey_id),
+        FOREIGN KEY (trainer_id) REFERENCES trainers (trainer_id)
     )
     ''')
 
@@ -96,11 +99,54 @@ def create_tables():
         name TEXT,
         birth_year INTEGER,
         sex TEXT,
+        trainer_id TEXT,
+        owner_id TEXT,
+        breeder_id TEXT,
         sire_line TEXT,
-        {pedigree_sql_part}
+        {pedigree_sql_part},
+        FOREIGN KEY (trainer_id) REFERENCES trainers (trainer_id),
+        FOREIGN KEY (owner_id) REFERENCES owners (owner_id),
+        FOREIGN KEY (breeder_id) REFERENCES breeders (breeder_id)
     )
     '''
     cursor.execute(create_horses_sql)
+
+    # 4. Jockeys Table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS jockeys (
+        jockey_id TEXT PRIMARY KEY,
+        name TEXT,
+        belonging TEXT,
+        birth_date TEXT
+    )
+    ''')
+
+    # 5. Trainers Table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS trainers (
+        trainer_id TEXT PRIMARY KEY,
+        name TEXT,
+        belonging TEXT,
+        birth_date TEXT
+    )
+    ''')
+
+    # 6. Owners Table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS owners (
+        owner_id TEXT PRIMARY KEY,
+        name TEXT,
+        country TEXT
+    )
+    ''')
+
+    # 7. Breeders Table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS breeders (
+        breeder_id TEXT PRIMARY KEY,
+        name TEXT
+    )
+    ''')
 
     conn.commit()
     conn.close()
