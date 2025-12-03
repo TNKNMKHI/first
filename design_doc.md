@@ -62,6 +62,7 @@
 | `name` | TEXT | 馬名 | |
 | `birth_year` | INTEGER | 生年 | |
 | `sex` | TEXT | 性別 | |
+| `trainer_id` | TEXT | 担当調教師ID | |
 | `sire_line` | TEXT | 牡系 | サイアーライン |
 | `f_id` | TEXT | 父ID | |
 | `m_id` | TEXT | 母ID | |
@@ -85,8 +86,18 @@
 | `third` | INTEGER | 通算３着数 | ３着回数 |
 | `career_races` | INTEGER | 通算出走数 | |
 
-
-
+#### `trainer` テーブル（調教師情報）
+騎手の基本情報。
+| カラム名 | 型 | 説明 | 備考 |
+| :--- | :--- | :--- | :--- |
+| `jockey_id` | TEXT | 騎手ID | **PK** |
+| `name` | TEXT | 騎手名 | |
+| `belonging` | TEXT | 所属 | 栗東 or 美浦 |
+| `birth_date` | TEXT | 生年月日 | ISO8601形式 (YYYY-MM-DD) |
+| `first` | INTEGER | 通算勝利数 | １着回数 |
+| `second` | INTEGER | 通算２着数 | ２着回数 |
+| `third` | INTEGER | 通算３着数 | ３着回数 |
+| `career_races` | INTEGER | 通算出走数 | |
 
 ## 3. 開発フロー
 
