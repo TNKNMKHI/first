@@ -90,7 +90,7 @@
 騎手の基本情報。
 | カラム名 | 型 | 説明 | 備考 |
 | :--- | :--- | :--- | :--- |
-| `jockey_id` | TEXT | 騎手ID | **PK** |
+| `trainer_id` | TEXT | 騎手ID | **PK** |
 | `name` | TEXT | 騎手名 | |
 | `belonging` | TEXT | 所属 | 栗東 or 美浦 |
 | `birth_date` | TEXT | 生年月日 | ISO8601形式 (YYYY-MM-DD) |
