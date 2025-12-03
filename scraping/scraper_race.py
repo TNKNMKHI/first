@@ -112,11 +112,17 @@ def parse_race_info(soup, race_id):
         venue_code = race_id[4:6]
         venue = venue_mapping.get(venue_code, "Unknown")
 
+        
+        # レースクラス（G1, G2など）
+        race_class_elem = soup.select_one('p.race_grade > span.grade')
+        race_class = race_class_elem.text.strip() if race_class_elem else ""
+
         return {
             'race_id': race_id,
             'date': date_str,
             'venue': venue,
             'race_name': title,
+            'race_class': race_class,
             'race_round': race_round,
             'course_type': course_type,
             'distance': distance,
@@ -130,42 +136,44 @@ def parse_race_info(soup, race_id):
         return None
 
 def parse_race_results(soup, race_id):
-    """レース結果テーブルを解析してリストで返す"""
-    results = []
+    """レース結果テーブルを解析して (results, jockeys, trainers) のタプルを返す"""
+    results, jockeys, trainers = [], [], []
     try:
         table = soup.select_one('table.race_table_01')
         if not table:
-            return []
+            return [], [], []
         
         rows = table.select('tr')[1:] # ヘッダーを除く
         for row in rows:
             cols = row.select('td')
-            if len(cols) < 10: continue
+            if len(cols) < 14: continue
             
             # 抽出処理
             rank_text = cols[0].text.strip()
-            if not rank_text.isdigit(): continue # 失格・除外などは一旦スキップ
+            if not rank_text.isdigit(): continue
             rank = int(rank_text)
             
             frame_no = int(cols[1].text.strip())
             horse_no = int(cols[2].text.strip())
             
-            # 馬ID取得
             horse_a = cols[3].select_one('a')
             horse_id = re.search(r'/horse/(\d+)', horse_a['href']).group(1) if horse_a else ""
             
-            # 性齢 (例: 牡3)
             sex_age = cols[4].text.strip()
-            sex = sex_age[0]
-            age = int(sex_age[1:])
-            
+            age = int(re.search(r'\d+', sex_age).group()) if re.search(r'\d+', sex_age) else 0
+
             weight = float(cols[5].text.strip())
             
-            # 騎手ID
             jockey_a = cols[6].select_one('a')
-            jockey_id = re.search(r'/jockey/result/recent/(\d+)', jockey_a['href']).group(1) if jockey_a else ""
-            
-            # タイム (例: 1:35.2)
+            jockey_id = ""
+            jockey_name = ""
+            if jockey_a:
+                jockey_id_match = re.search(r'/jockey/result/recent/(\w+)', jockey_a['href'])
+                jockey_id = jockey_id_match.group(1) if jockey_id_match else ""
+                jockey_name = jockey_a.text.strip()
+                if jockey_id:
+                    jockeys.append({'jockey_id': jockey_id, 'name': jockey_name})
+
             time_str = cols[7].text.strip()
             try:
                 if ':' in time_str:
@@ -173,91 +181,111 @@ def parse_race_results(soup, race_id):
                     time_seconds = int(m) * 60 + float(s)
                 else:
                     time_seconds = float(time_str)
-            except:
+            except (ValueError, TypeError):
                 time_seconds = None
             
             margin = cols[8].text.strip()
             
-            popularity = cols[9].text.strip()
-            popularity = int(popularity) if popularity.isdigit() else None
-            
-            odds = cols[10].text.strip()
-            try: odds = float(odds)
-            except: odds = None
-            
-            last_3f = cols[11].text.strip()
-            try: last_3f = float(last_3f)
-            except: last_3f = None
+            # 9番人気が単勝オッズと同じtd内にある場合がある
+            pop_odds_text = cols[9].text.strip()
+            try:
+                popularity = int(cols[9].text.strip())
+                odds = float(cols[10].text.strip())
+            except ValueError:
+                try: # 同一セルに人気とオッズが含まれるパターン
+                    pop_match = re.search(r'^(\d+)', pop_odds_text)
+                    popularity = int(pop_match.group(1)) if pop_match else None
+                    
+                    odds_match = re.search(r'\((\d+\.\d+)\)$', pop_odds_text)
+                    odds = float(odds_match.group(1)) if odds_match else None
+                except (ValueError, TypeError):
+                    popularity = None
+                    odds = None
+
+            last_3f_text = cols[11].text.strip()
+            try:
+                last_3f = float(last_3f_text)
+            except (ValueError, TypeError):
+                last_3f = None
             
             passing = cols[12].text.strip()
             
             trainer_a = cols[13].select_one('a')
-            trainer_id = re.search(r'/trainer/result/recent/(\d+)', trainer_a['href']).group(1) if trainer_a else ""
-            
+            trainer_id = ""
+            trainer_name = ""
+            if trainer_a:
+                trainer_id_match = re.search(r'/trainer/result/recent/(\w+)', trainer_a['href'])
+                trainer_id = trainer_id_match.group(1) if trainer_id_match else ""
+                trainer_name = trainer_a.text.strip()
+                if trainer_id:
+                    trainers.append({'trainer_id': trainer_id, 'name': trainer_name})
+
             weight_text = cols[14].text.strip()
             hw_match = re.search(r'(\d+)\((.*?)\)', weight_text)
             horse_weight = int(hw_match.group(1)) if hw_match else None
             weight_diff_str = hw_match.group(2) if hw_match else "0"
             try:
                 weight_diff = int(weight_diff_str)
-            except:
+            except (ValueError, TypeError):
                 weight_diff = 0
             
             results.append({
-                'race_id': race_id,
-                'horse_id': horse_id,
-                'rank': rank,
-                'frame_no': frame_no,
-                'horse_no': horse_no,
-                'jockey_id': jockey_id,
-                'trainer_id': trainer_id,
-                'age': age,
-                'sex': sex,
-                'weight': weight,
-                'time_seconds': time_seconds,
-                'margin': margin,
-                'passing': passing,
-                'last_3f': last_3f,
-                'odds': odds,
-                'popularity': popularity,
-                'horse_weight': horse_weight,
-                'weight_diff': weight_diff
+                'race_id': race_id, 'horse_id': horse_id, 'rank': rank,
+                'frame_no': frame_no, 'horse_no': horse_no,
+                'jockey_id': jockey_id, 'trainer_id': trainer_id,
+                'age': age, 'weight': weight, 'time_seconds': time_seconds,
+                'margin': margin, 'passing': passing, 'last_3f': last_3f,
+                'odds': odds, 'popularity': popularity,
+                'horse_weight': horse_weight, 'weight_diff': weight_diff
             })
             
     except Exception as e:
         print(f"Error parsing results for {race_id}: {e}")
         traceback.print_exc()
-        return []
+        return [], [], []
     
-    return results
+    return results, jockeys, trainers
 
-def save_to_db(race_info, results):
+def save_to_db(race_info, results, jockeys, trainers):
     """DBに保存する"""
     if not race_info or not results:
         return
     
-    # 相対パス対応: スクリプトのディレクトリとDBのパスを適切に結合するか、絶対パスを使う
-    # ここでは簡易的に現在のカレントディレクトリにあると仮定（実行時に注意）
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
+        # Racesテーブルへの挿入
         cursor.execute('''
-        INSERT OR IGNORE INTO races (race_id, date, venue, race_name, race_round, course_type, distance, rotation, weather, state, entries)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO races (race_id, date, venue, race_name, race_class, race_round, course_type, distance, rotation, weather, state, entries)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             race_info['race_id'], race_info['date'], race_info['venue'], race_info['race_name'],
-            race_info['race_round'], race_info['course_type'], race_info['distance'],
-            race_info['rotation'], race_info['weather'], race_info['state'], len(results)
+            race_info['race_class'], race_info['race_round'], race_info['course_type'],
+            race_info['distance'], race_info['rotation'], race_info['weather'], race_info['state'],
+            len(results)
         ))
         
+        # Jockeysテーブルへの挿入
+        jockey_data = [(j['jockey_id'], j['name']) for j in jockeys]
+        cursor.executemany('''
+        INSERT OR IGNORE INTO jockeys (jockey_id, name) VALUES (?, ?)
+        ''', jockey_data)
+
+        # Trainersテーブルへの挿入
+        trainer_data = [(t['trainer_id'], t['name']) for t in trainers]
+        cursor.executemany('''
+        INSERT OR IGNORE INTO trainers (trainer_id, name) VALUES (?, ?)
+        ''', trainer_data)
+
+        # Resultsテーブルへの挿入
         for res in results:
             cursor.execute('''
-            INSERT OR IGNORE INTO results (race_id, horse_id, rank, frame_no, horse_no, jockey_id, trainer_id, age, sex, weight, time_seconds, margin, passing, last_3f, odds, popularity, horse_weight, weight_diff)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO results (race_id, horse_id, rank, frame_no, horse_no, jockey_id, trainer_id, age, weight, time_seconds, margin, passing, last_3f, odds, popularity, horse_weight, weight_diff)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 res['race_id'], res['horse_id'], res['rank'], res['frame_no'], res['horse_no'],
-                res['jockey_id'], res['trainer_id'], res['age'], res['sex'], res['weight'],
+                res['jockey_id'], res['trainer_id'], res['age'], res['weight'],
                 res['time_seconds'], res['margin'], res['passing'], res['last_3f'], res['odds'],
                 res['popularity'], res['horse_weight'], res['weight_diff']
             ))
@@ -265,6 +293,7 @@ def save_to_db(race_info, results):
         conn.commit()
     except Exception as e:
         print(f"DB Error: {e}")
+        traceback.print_exc()
     finally:
         conn.close()
 
@@ -324,8 +353,8 @@ def scrape_year(year, driver):
                     
                     consecutive_failures = 0 
                     
-                    results = parse_race_results(soup, race_id)
-                    save_to_db(race_info, results)
+                    results, jockeys, trainers = parse_race_results(soup, race_id)
+                    save_to_db(race_info, results, jockeys, trainers)
                     print(f"Saved {race_id}: {race_info['race_name']}")
                 
                 if consecutive_failures >= 12:

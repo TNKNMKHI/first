@@ -81,88 +81,154 @@ def parse_pedigree(soup):
     if not table:
         return {}
 
-    # 父ID (f_id) の取得
-    # スマホ版の簡易表示などに対応するため、柔軟に探索
-    f_id = None
+    ancestors = []
+    links = table.select('a[href*="/horse/ped/"]')
     
-    # 1. rowspan="32" (PC版) を探す
-    father_td = table.select_one('td[rowspan="32"]')
-    if father_td:
-        a_tag = father_td.select_one('a')
-        if a_tag and 'href' in a_tag.attrs:
-            m = re.search(r'/horse/(\d+)', a_tag['href'])
-            if m: f_id = m.group(1)
-    
-    # 2. rowspan="2" (スマホ版?) の最初のセルを探す
-    # 簡易ロジック: 最初の有効なリンクを持つtdを父とみなす（危険だが暫定措置）
-    if not f_id:
-        tds = table.select('td')
-        for td in tds:
-            a_tag = td.select_one('a')
-            if a_tag and 'href' in a_tag.attrs and '/horse/' in a_tag['href']:
-                m = re.search(r'/horse/(\d+)', a_tag['href'])
-                if m:
-                    f_id = m.group(1)
-                    break 
+    for link in links:
+        match = re.search(r'/horse/ped/(\w+)', link['href'])
+        if match:
+            ancestors.append(match.group(1))
 
-    return {'f_id': f_id} 
+    # 5代血統のカラム名を生成 (f, m, ff, fm, mf, mm, ...)
+    # 2 + 4 + 8 + 16 + 32 = 62 祖先
+    cols = []
+    base = ['f', 'm']
+    
+    # 1代から5代までループ
+    current_gen = ['']
+    for i in range(5):
+        next_gen_labels = []
+        for label in current_gen:
+            next_gen_labels.append(label + 'f')
+            next_gen_labels.append(label + 'm')
+        cols.extend(next_gen_labels)
+        current_gen = next_gen_labels
+    
+    # 抽出したIDをカラムにマッピング (最大62カラム)
+    for i, col_name in enumerate(cols):
+        if i < len(ancestors):
+            pedigree[f"{col_name}_id"] = ancestors[i]
+        else:
+            pedigree[f"{col_name}_id"] = None # 足りない場合はNone
+            
+    return pedigree 
 
 def parse_horse_page(soup, horse_id):
-    """馬の個別ページを解析"""
+    """馬の個別ページを解析し、(horse_data, owner_data, breeder_data) を返す"""
     try:
+        horse_data = {'horse_id': horse_id}
+        owner_data = None
+        breeder_data = None
+
         name_elem = soup.select_one('div.horse_title h1')
-        name = name_elem.text.strip() if name_elem else ""
+        horse_data['name'] = name_elem.text.strip() if name_elem else ""
         
         prof_table = soup.select_one('table.db_prof_table')
-        birth_year = None
-        sex = None
-        
         if prof_table:
             rows = prof_table.select('tr')
             for row in rows:
                 th = row.select_one('th').text.strip()
-                td = row.select_one('td').text.strip()
+                td = row.select_one('td')
                 
                 if th == '生年月日':
-                    m = re.search(r'(\d+)年', td)
-                    if m: 
-                        birth_year = int(m.group(1))
+                    m = re.search(r'(\d+)年', td.text)
+                    horse_data['birth_year'] = int(m.group(1)) if m else None
                     
-                if th == '性別':
-                    sex = td.strip()
+                elif th == '性別':
+                    horse_data['sex'] = td.text.strip()
+                    
+                elif th == '調教師':
+                    a_tag = td.select_one('a')
+                    if a_tag:
+                        match = re.search(r'/trainer/prof/(\w+)/', a_tag['href'])
+                        horse_data['trainer_id'] = match.group(1) if match else None
+                
+                elif th == '馬主':
+                    a_tag = td.select_one('a')
+                    if a_tag:
+                        match = re.search(r'/owner/prof/(\w+)/', a_tag['href'])
+                        owner_id = match.group(1) if match else None
+                        owner_name = a_tag.text.strip()
+                        if owner_id:
+                            horse_data['owner_id'] = owner_id
+                            owner_data = {'owner_id': owner_id, 'name': owner_name}
+                
+                elif th == '生産者':
+                    a_tag = td.select_one('a')
+                    if a_tag:
+                        match = re.search(r'/breeder/prof/(\w+)/', a_tag['href'])
+                        breeder_id = match.group(1) if match else None
+                        breeder_name = a_tag.text.strip()
+                        if breeder_id:
+                            horse_data['breeder_id'] = breeder_id
+                            breeder_data = {'breeder_id': breeder_id, 'name': breeder_name}
+                
+                elif th == 'サイアーライン':
+                    horse_data['sire_line'] = td.text.strip()
                     
         pedigree_data = parse_pedigree(soup)
+        horse_data.update(pedigree_data)
         
-        return {
-            'horse_id': horse_id,
-            'name': name,
-            'birth_year': birth_year,
-            'sex': sex,
-            'sire_line': '', 
-            **pedigree_data
-        }
+        return horse_data, owner_data, breeder_data
             
     except Exception as e:
         print(f"Error parsing horse page {horse_id}: {e}")
-        return None
+        traceback.print_exc()
+        return None, None, None
 
-def save_horse_to_db(data):
-    if not data: return
+def save_horse_to_db(horse_data, owner_data, breeder_data):
+    if not horse_data: return
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
-        cursor.execute('''
-        INSERT OR IGNORE INTO horses (horse_id, name, birth_year, sex, sire_line, f_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            data['horse_id'], data['name'], data['birth_year'], data['sex'], 
-            data['sire_line'], data.get('f_id')
-        ))
+        # OwnerとBreederを先に保存
+        if owner_data:
+            cursor.execute("INSERT OR IGNORE INTO owners (owner_id, name) VALUES (?, ?)",
+                           (owner_data['owner_id'], owner_data['name']))
+        if breeder_data:
+            cursor.execute("INSERT OR IGNORE INTO breeders (breeder_id, name) VALUES (?, ?)",
+                           (breeder_data['breeder_id'], breeder_data['name']))
+
+        # 5代血統のカラム名を動的に生成
+        pedigree_cols = []
+        current_gen = ['']
+        for _ in range(5):
+            next_gen = []
+            for label in current_gen:
+                next_gen.extend([label + 'f', label + 'm'])
+            pedigree_cols.extend(next_gen)
+            current_gen = next_gen
+        
+        pedigree_col_names = [f"{col}_id" for col in pedigree_cols]
+        
+        # SQL文の準備
+        columns = [
+            'horse_id', 'name', 'birth_year', 'sex', 
+            'trainer_id', 'owner_id', 'breeder_id', 'sire_line',
+            *pedigree_col_names
+        ]
+        
+        placeholders = ', '.join(['?'] * len(columns))
+        sql = f"INSERT OR IGNORE INTO horses ({', '.join(columns)}) VALUES ({placeholders})"
+        
+        # 値のリストを準備
+        values = [
+            horse_data.get('horse_id'), horse_data.get('name'), horse_data.get('birth_year'),
+            horse_data.get('sex'), horse_data.get('trainer_id'), horse_data.get('owner_id'),
+            horse_data.get('breeder_id'), horse_data.get('sire_line', '')
+        ]
+        # 血統IDを追加
+        for col in pedigree_col_names:
+            values.append(horse_data.get(col))
+            
+        cursor.execute(sql, tuple(values))
         conn.commit()
-    except Exception as e:
+
+    except sqlite3.Error as e:
         print(f"DB Error: {e}")
+        traceback.print_exc()
     finally:
         conn.close()
 
@@ -170,15 +236,23 @@ def scrape_missing_horses(driver):
     ids = get_unscraped_horse_ids()
     print(f"Found {len(ids)} horses to scrape.")
     
+    if not ids:
+        print("No new horses to scrape.")
+        return
+
     for hid in tqdm(ids):
         html = get_html_with_selenium(driver, hid)
-        if not html: continue
+        if not html:
+            print(f"Failed to fetch HTML for {hid}. Skipping.")
+            continue
         
         soup = BeautifulSoup(html, 'lxml')
-        data = parse_horse_page(soup, hid)
+        horse_data, owner_data, breeder_data = parse_horse_page(soup, hid)
         
-        if data:
-            save_horse_to_db(data)
+        if horse_data:
+            save_horse_to_db(horse_data, owner_data, breeder_data)
+        else:
+            print(f"Failed to parse data for {hid}. Skipping.")
 
 if __name__ == "__main__":
     print("Initializing Selenium Driver...")
