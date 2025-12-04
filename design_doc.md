@@ -53,27 +53,28 @@
 | `weight_diff` | INTEGER | 体重増減 | |
 
 #### `horses` テーブル (競走馬・血統情報)
-馬の静的データ。血統は特徴量として扱いやすくするため非正規化している。
+馬の静的データ。血統情報は`pedigrees`テーブルに正規化して格納する。
 
 | カラム名 | 型 | 説明 | 備考 |
 | :--- | :--- | :--- | :--- |
 | `horse_id` | TEXT | 馬ID | **PK** (例: `2021100123`) |
 | `name` | TEXT | 馬名 | |
-| `birth_year` | INTEGER | 生年 | |
+| `birth_date` | TEXT | 生年月日 | ISO8601形式 (YYYY-MM-DD) |
 | `sex` | TEXT | 性別 | 牡/牝/セ |
 | `trainer_id` | TEXT | 現在の担当調教師ID | **FK** (`trainers.trainer_id`) |
 | `owner_id` | TEXT | 馬主ID | **FK**(`owners.owner_id`) |
 | `breeder_id` | TEXT | 生産者ID | **FK**(`breeders.breeder_id`) |
-| `sire_line` | TEXT | 牡系 | サイアーライン |
-| `f_id` | TEXT | 父ID | |
-| `m_id` | TEXT | 母ID | |
-| `ff_id` | TEXT | 父父ID | |
-| `fm_id` | TEXT | 父母ID | |
-| `mf_id` | TEXT | 母父ID | |
-| `mm_id` | TEXT | 母母ID | |
-| ... | ... | ... | 3代以降も同様 |
-| `mmm_id` | TEXT | 3代母母 | |
 
+#### `pedigrees` テーブル (血統情報)
+馬の血統情報を正規化して格納するテーブル。
+
+| カラム名 | 型 | 説明 | 備考 |
+| :--- | :--- | :--- | :--- |
+| `horse_id` | TEXT | 子孫となる馬のID | **PK, FK** (`horses.horse_id`) |
+| `ancestor_id` | TEXT | 祖先となる馬のID | **FK** (`horses.horse_id`) |
+| `generation` | INTEGER | 世代 | 1:親, 2:祖父母, ... |
+| `position` | TEXT | 世代内での位置 | **PK** (例: 'f', 'm', 'ff', 'fm') |
+ 
 #### `jockeys` テーブル (騎手情報)
 騎手の静的情報。成績（勝利数など）は `results` テーブルから都度集計する。
 | カラム名 | 型 | 説明 | 備考 |
