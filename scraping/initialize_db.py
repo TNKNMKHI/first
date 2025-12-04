@@ -91,7 +91,7 @@ def create_tables():
 
     # 3. Horses Table
     pedigree_cols = generate_pedigree_columns()
-    pedigree_sql_part = "\n        ".join(pedigree_cols)
+    pedigree_sql_part = ",\n        ".join(pedigree_cols)
     
     create_horses_sql = f'''
     CREATE TABLE IF NOT EXISTS horses (
