@@ -47,7 +47,7 @@ def get_html_with_selenium(driver, race_id):
     url = f"{BASE_URL}{race_id}"
     try:
         driver.get(url)
-        time.sleep(1) # ページ読み込み待機 + 負荷軽減
+        time.sleep(0.8) # ページ読み込み待機 + 負荷軽減
         
         # タイトルに "エラー" が含まれていないかチェック
         if "エラー" in driver.title or "ご指定のページは見つかりませんでした" in driver.page_source:
@@ -311,7 +311,7 @@ def get_existing_race_ids(year):
     conn.close()
     return ids
 
-def scrape_year(year, driver):
+def scrape_year(year):
     """指定した年の全レースをスクレイピングする"""
     print(f"Starting scrape for year {year}...")
     
@@ -322,61 +322,73 @@ def scrape_year(year, driver):
     for place in range(1, 11):
         place_id = f"{place:02}"
         
-        for kai in range(1, 7): 
-            kai_id = f"{kai:02}"
-            
-            for day in range(1, 13): 
-                day_id = f"{day:02}"
-                consecutive_failures = 0
+        # WebDriverを会場（place）ごとに初期化
+        print(f"--- Initializing driver for place {place_id} ---")
+        driver = get_driver()
+        
+        try:
+            for kai in range(1, 7): 
+                kai_id = f"{kai:02}"
                 
-                for r in range(1, 13):
-                    r_id = f"{r:02}"
-                    race_id = f"{year}{place_id}{kai_id}{day_id}{r_id}"
+                for day in range(1, 13): 
+                    day_id = f"{day:02}"
+                    consecutive_failures = 0
                     
-                    # スキップ判定
-                    if race_id in existing_ids:
-                        print(f"Skipping {race_id}: Already exists.")
-                        continue
-                    
-                    html = get_html_with_selenium(driver, race_id)
-                    
-                    if not html:
-                        consecutive_failures += 1
-                        continue
+                    for r in range(1, 13):
+                        r_id = f"{r:02}"
+                        race_id = f"{year}{place_id}{kai_id}{day_id}{r_id}"
                         
-                    soup = BeautifulSoup(html, 'lxml')
-                    race_info = parse_race_info(soup, race_id)
+                        # スキップ判定
+                        if race_id in existing_ids:
+                            # print(f"Skipping {race_id}: Already exists.") # ログが多すぎる場合があるため非表示化を推奨
+                            continue
+                        
+                        # ここで 'invalid session id' エラーが発生する可能性がある
+                        html = get_html_with_selenium(driver, race_id)
+                        
+                        if not html:
+                            consecutive_failures += 1
+                            continue
+                            
+                        soup = BeautifulSoup(html, 'lxml')
+                        race_info = parse_race_info(soup, race_id)
+                        
+                        if not race_info:
+                            consecutive_failures += 1
+                            continue 
+                        
+                        consecutive_failures = 0 
+                        
+                        results, jockeys, trainers = parse_race_results(soup, race_id)
+                        save_to_db(race_info, results, jockeys, trainers)
+                        print(f"Saved {race_id}: {race_info['race_name']}")
                     
-                    if not race_info:
-                        consecutive_failures += 1
-                        continue 
-                    
-                    consecutive_failures = 0 
-                    
-                    results, jockeys, trainers = parse_race_results(soup, race_id)
-                    save_to_db(race_info, results, jockeys, trainers)
-                    print(f"Saved {race_id}: {race_info['race_name']}")
+                    # 12レース連続で失敗した場合、その日のループを抜ける
+                    if consecutive_failures >= 12:
+                         break
                 
+                # consecutive_failuresが引き継がれている場合、開催回のループも抜ける
                 if consecutive_failures >= 12:
-                     # その日のレースが全滅なら、その開催回の日程は終了している可能性が高い
-                     # print(f"Skipping remaining days for kai {kai_id} at place {place_id}")
                      break
+        
+        except Exception as e:
+            # 会場ごとのループでエラーが発生しても、次の会場へ進む
+            print(f"An error occurred while scraping place {place_id}: {e}")
+            traceback.print_exc()
+        finally:
+            # 各会場の処理が終わったら、必ずドライバーを閉じる
+            print(f"--- Closing driver for place {place_id} ---")
+            driver.quit()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Scrape race data from netkeiba')
     parser.add_argument('year', type=int, help='Year to scrape (e.g., 2023)')
     args = parser.parse_args()
 
-    print("Initializing Selenium Driver...")
-    driver = get_driver()
-    
+    # scrape_yearの中でトライバーの管理を行う
     try:
-        scrape_year(args.year, driver)
+        scrape_year(args.year)
         print("Scraping completed.")
-            
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"A general error occurred outside the scraping loop: {e}")
         traceback.print_exc()
-    finally:
-        print("Closing driver...")
-        driver.quit()
