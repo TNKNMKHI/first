@@ -39,10 +39,9 @@
 | `rank` | INTEGER | 着順 | 失格等は除外または別値 |
 | `frame_no` | INTEGER | 枠番 | |
 | `horse_no` | INTEGER | 馬番 | |
-| `jockey_id` | TEXT | 騎手ID | |
-| `trainer_id` | TEXT | 調教師ID | |
-| `age` | INTEGER | 年齢 | |
-| `sex` | TEXT | 性別 | 牡/牝/セ |
+| `jockey_id` | TEXT | 騎手ID | **FK** (`jockeys.jockey_id`) |
+| `trainer_id` | TEXT | 調教師ID | **FK** (`trainers.trainer_id`) |
+| `age` | INTEGER | 年齢 | レース開催時点 |
 | `weight` | REAL | 斤量 | |
 | `time_seconds` | REAL | タイム(秒) | 変換済みデータ |
 | `margin` | TEXT | 着差 | |
@@ -54,23 +53,61 @@
 | `weight_diff` | INTEGER | 体重増減 | |
 
 #### `horses` テーブル (競走馬・血統情報)
-馬の静的データ。5代血統までの全祖先IDをカラムとして保持する。
+馬の静的データ。血統情報は`pedigrees`テーブルに正規化して格納する。
 
 | カラム名 | 型 | 説明 | 備考 |
 | :--- | :--- | :--- | :--- |
 | `horse_id` | TEXT | 馬ID | **PK** (例: `2021100123`) |
 | `name` | TEXT | 馬名 | |
-| `birth_year` | INTEGER | 生年 | |
-| `sex` | TEXT | 性別 | |
-| `sire_line` | TEXT | 牡系 | サイアーライン |
-| `f_id` | TEXT | 父ID | |
-| `m_id` | TEXT | 母ID | |
-| `ff_id` | TEXT | 父父ID | |
-| `fm_id` | TEXT | 父母ID | |
-| `mf_id` | TEXT | 母父ID | |
-| `mm_id` | TEXT | 母母ID | |
-| ... | ... | ... | (3代〜5代も同様にカラム展開。計62カラム) |
-| `mmmmm_id` | TEXT | 5代母母 | |
+| `birth_date` | TEXT | 生年月日 | ISO8601形式 (YYYY-MM-DD) |
+| `sex` | TEXT | 性別 | 牡/牝/セ |
+| `trainer_id` | TEXT | 現在の担当調教師ID | **FK** (`trainers.trainer_id`) |
+| `owner_id` | TEXT | 馬主ID | **FK**(`owners.owner_id`) |
+| `breeder_id` | TEXT | 生産者ID | **FK**(`breeders.breeder_id`) |
+
+#### `pedigrees` テーブル (血統情報)
+馬の血統情報を正規化して格納するテーブル。
+
+| カラム名 | 型 | 説明 | 備考 |
+| :--- | :--- | :--- | :--- |
+| `horse_id` | TEXT | 子孫となる馬のID | **PK, FK** (`horses.horse_id`) |
+| `ancestor_id` | TEXT | 祖先となる馬のID | **FK** (`horses.horse_id`) |
+| `generation` | INTEGER | 世代 | 1:親, 2:祖父母, ... |
+| `position` | TEXT | 世代内での位置 | **PK** (例: 'f', 'm', 'ff', 'fm') |
+ 
+#### `jockeys` テーブル (騎手情報)
+騎手の静的情報。成績（勝利数など）は `results` テーブルから都度集計する。
+| カラム名 | 型 | 説明 | 備考 |
+| :--- | :--- | :--- | :--- |
+| `jockey_id` | TEXT | 騎手ID | **PK** |
+| `name` | TEXT | 騎手名 | |
+| `belonging` | TEXT | 所属 | 栗東 or 美浦 |
+| `birth_date` | TEXT | 生年月日 | ISO8601形式 (YYYY-MM-DD) |
+
+#### `trainers` テーブル (調教師情報)
+調教師の静的情報。成績（勝利数など）は `results` テーブルから都度集集計する。
+| カラム名 | 型 | 説明 | 備考 |
+| :--- | :--- | :--- | :--- |
+| `trainer_id` | TEXT | 調教師ID | **PK** |
+| `name` | TEXT | 調教師名 | |
+| `belonging` | TEXT | 所属 | 栗東 or 美浦 |
+| `birth_date` | TEXT | 生年月日 | ISO8601形式 (YYYY-MM-DD) |
+
+#### `owners` テーブル (馬主情報)
+馬主の静的情報。
+| カラム名 | 型 | 説明 | 備考 |
+| :--- | :--- | :--- | :--- |
+| `owner_id` | TEXT | 馬主ID | **PK** |
+| `name` | TEXT | 馬主名 | |
+| `country` | TEXT | 国籍 | |
+
+#### `breeders` テーブル (生産者情報)
+生産者の静的情報。
+| カラム名 | 型 | 説明 | 備考 |
+| :--- | :--- | :--- | :--- |
+| `breeder_id` | TEXT | 生産者ID | **PK** |
+| `name` | TEXT | 生産者名 | |
+
 
 ## 3. 開発フロー
 

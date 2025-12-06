@@ -7,14 +7,9 @@ from tqdm import tqdm
 import traceback
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
-
-# Selenium imports
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 
 # SSL警告を抑制
 urllib3.disable_warnings(InsecureRequestWarning)
@@ -25,36 +20,24 @@ DB_PATH = os.getenv('DB_FILE_PATH')
 if not DB_PATH:
     raise ValueError("DB_FILE_PATH is not set in .env file")
 
-BASE_URL = "https://db.netkeiba.com/horse/"
+BASE_URL = "https://www.jbis.or.jp/horse/"
 
-def get_driver():
-    """Selenium WebDriverを初期化して返す"""
-    chrome_options = Options()
-    chrome_options.add_argument("--headless") 
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    return driver
-
-def get_html_with_selenium(driver, horse_id):
-    """Seleniumを使ってページを取得しHTMLを返す"""
-    url = f"{BASE_URL}{horse_id}"
+def get_html_from_jbis(url):
+    """指定されたJBISのURLからHTMLを取得する"""
     try:
-        driver.get(url)
-        # JavaScriptの読み込み待ち時間を延長
-        time.sleep(5)
-        
-        if "エラー" in driver.title or "ご指定のページは見つかりませんでした" in driver.page_source:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        response = requests.get(url, headers=headers, verify=False, timeout=10)
+        response.raise_for_status()
+        response.encoding = response.apparent_encoding
+
+        if "該当するデータが見つかりませんでした" in response.text:
+            print(f"Page not found or no data for URL: {url}")
             return None
-            
-        return driver.page_source
-    except Exception as e:
-        print(f"Error fetching {url} with Selenium: {e}")
+        return response.text
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching {url}: {e}")
         return None
 
 def get_unscraped_horse_ids():
@@ -74,123 +57,223 @@ def get_unscraped_horse_ids():
     conn.close()
     return ids
 
-def parse_pedigree(soup):
+def parse_pedigree(pedigree_soup):
     """5代血統表を解析して祖先IDの辞書を返す"""
-    pedigree = {}
-    table = soup.select_one('table.blood_table')
+    # 変更後: (ancestor_id, generation, position) のタプルのリストを返す
+    pedigree_list = []
+    # 旧実装: pedigree = {}
+
+    table = pedigree_soup.select_one('table.tbl-pedigree')
     if not table:
         return {}
 
-    # 父ID (f_id) の取得
-    # スマホ版の簡易表示などに対応するため、柔軟に探索
-    f_id = None
+    ancestors = []
+    # 1代から5代までの祖先を取得 (62頭)
+    # 父、母、父母、母父、母母... の順
+    rows = table.select('tr')
     
-    # 1. rowspan="32" (PC版) を探す
-    father_td = table.select_one('td[rowspan="32"]')
-    if father_td:
-        a_tag = father_td.select_one('a')
-        if a_tag and 'href' in a_tag.attrs:
-            m = re.search(r'/horse/(\d+)', a_tag['href'])
-            if m: f_id = m.group(1)
+    # 1代 (父、母)
+    sire_a = rows[0].select_one('td a')
+    dam_a = rows[16].select_one('td a')
+    ancestors.append(re.search(r'/horse/(\w+)/', sire_a['href']).group(1) if sire_a else None)
+    ancestors.append(re.search(r'/horse/(\w+)/', dam_a['href']).group(1) if dam_a else None)
+
+    # 2代 (FF, FM, MF, MM)
+    ancestors.append(re.search(r'/horse/(\w+)/', rows[0].select('td a')[1]['href']).group(1) if len(rows[0].select('td a')) > 1 else None)
+    ancestors.append(re.search(r'/horse/(\w+)/', rows[8].select_one('td a')['href']).group(1) if rows[8].select_one('td a') else None)
+    ancestors.append(re.search(r'/horse/(\w+)/', rows[16].select('td a')[1]['href']).group(1) if len(rows[16].select('td a')) > 1 else None)
+    ancestors.append(re.search(r'/horse/(\w+)/', rows[24].select_one('td a')['href']).group(1) if rows[24].select_one('td a') else None)
+
+    # 3代以降 (8 + 16 + 32 = 56頭)
+    # 各世代の先頭インデックス
+    gen3_indices = [0, 4, 8, 12, 16, 20, 24, 28]
+    gen4_indices = [i for i in range(32) if i % 2 == 0]
+    gen5_indices = [i for i in range(32)]
+
+    # 3代
+    for i in gen3_indices:
+        a_tags = rows[i].select('td a')
+        ancestors.append(re.search(r'/horse/(\w+)/', a_tags[2]['href']).group(1) if len(a_tags) > 2 else None)
+    # 4代
+    for i in gen4_indices:
+        a_tags = rows[i].select('td a')
+        ancestors.append(re.search(r'/horse/(\w+)/', a_tags[3]['href']).group(1) if len(a_tags) > 3 else None)
+    # 5代
+    for i in gen5_indices:
+        a_tags = rows[i].select('td a')
+        ancestors.append(re.search(r'/horse/(\w+)/', a_tags[4]['href']).group(1) if len(a_tags) > 4 else None)
+
+    cols = []
+    current_gen = ['']
+    for i in range(5):
+        next_gen_labels = []
+        for label in current_gen:
+            next_gen_labels.append(label + 'f')
+            next_gen_labels.append(label + 'm')
+        cols.extend(sorted(next_gen_labels)) # f, m, ff, fm, mf, mm... の順にする
+        current_gen = next_gen_labels
     
-    # 2. rowspan="2" (スマホ版?) の最初のセルを探す
-    # 簡易ロジック: 最初の有効なリンクを持つtdを父とみなす（危険だが暫定措置）
-    if not f_id:
-        tds = table.select('td')
-        for td in tds:
-            a_tag = td.select_one('a')
-            if a_tag and 'href' in a_tag.attrs and '/horse/' in a_tag['href']:
-                m = re.search(r'/horse/(\d+)', a_tag['href'])
-                if m:
-                    f_id = m.group(1)
-                    break 
+    for i, position in enumerate(cols):
+        if i < len(ancestors):
+            ancestor_id = ancestors[i]
+            if ancestor_id:
+                generation = len(position)
+                pedigree_list.append((ancestor_id, generation, position))
 
-    return {'f_id': f_id} 
+    return pedigree_list
 
-def parse_horse_page(soup, horse_id):
-    """馬の個別ページを解析"""
+def parse_horse_page(profile_soup, horse_id):
+    """馬の個別ページを解析し、(horse_data, owner_data, breeder_data) を返す"""
     try:
-        name_elem = soup.select_one('div.horse_title h1')
-        name = name_elem.text.strip() if name_elem else ""
+        horse_data = {'horse_id': horse_id}
+        owner_data = None
+        breeder_data = None
+
+        name_elem = profile_soup.select_one('h1.heading-level2-bold')
+        horse_data['name'] = name_elem.text.strip() if name_elem else ""
         
-        prof_table = soup.select_one('table.db_prof_table')
-        birth_year = None
-        sex = None
-        
+        prof_table = profile_soup.select_one('table.tbl-data-04')
         if prof_table:
             rows = prof_table.select('tr')
             for row in rows:
                 th = row.select_one('th').text.strip()
-                td = row.select_one('td').text.strip()
+                td = row.select_one('td')
                 
-                if th == '生年月日':
-                    m = re.search(r'(\d+)年', td)
-                    if m: 
-                        birth_year = int(m.group(1))
+                if '生年月日' in th:
+                    # e.g., "2021/04/14"
+                    date_text = td.text.strip()
+                    try:
+                        # JBISの "YYYY/MM/DD" 形式をパース
+                        dt_obj = datetime.strptime(date_text, '%Y/%m/%d')
+                        horse_data['birth_date'] = dt_obj.strftime('%Y-%m-%d')
+                    except (ValueError, TypeError):
+                        horse_data['birth_date'] = None
                     
-                if th == '性別':
-                    sex = td.strip()
+                elif '性別' in th:
+                    horse_data['sex'] = td.text.strip()
                     
-        pedigree_data = parse_pedigree(soup)
+                elif '調教師' in th:
+                    a_tag = td.select_one('a')
+                    if a_tag:
+                        match = re.search(r'/trainer/(\w+)/', a_tag['href'])
+                        horse_data['trainer_id'] = match.group(1) if match else None
+                
+                elif '馬主' in th:
+                    a_tag = td.select_one('a')
+                    if a_tag:
+                        match = re.search(r'/owner/(\w+)/', a_tag['href'])
+                        owner_id = match.group(1) if match else None
+                        owner_name = a_tag.text.strip()
+                        if owner_id:
+                            horse_data['owner_id'] = owner_id
+                            owner_data = {'owner_id': owner_id, 'name': owner_name}
+                
+                elif '生産者' in th:
+                    a_tag = td.select_one('a')
+                    if a_tag:
+                        match = re.search(r'/breeder/(\w+)/', a_tag['href'])
+                        breeder_id = match.group(1) if match else None
+                        breeder_name = a_tag.text.strip()
+                        if breeder_id:
+                            horse_data['breeder_id'] = breeder_id
+                            breeder_data = {'breeder_id': breeder_id, 'name': breeder_name}
         
-        return {
-            'horse_id': horse_id,
-            'name': name,
-            'birth_year': birth_year,
-            'sex': sex,
-            'sire_line': '', 
-            **pedigree_data
-        }
+        return horse_data, owner_data, breeder_data
             
     except Exception as e:
         print(f"Error parsing horse page {horse_id}: {e}")
-        return None
+        traceback.print_exc()
+        return None, None, None
 
-def save_horse_to_db(data):
-    if not data: return
+def save_horse_to_db(horse_data, owner_data, breeder_data, pedigree_list):
+    if not horse_data: return
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     try:
-        cursor.execute('''
-        INSERT OR IGNORE INTO horses (horse_id, name, birth_year, sex, sire_line, f_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            data['horse_id'], data['name'], data['birth_year'], data['sex'], 
-            data['sire_line'], data.get('f_id')
-        ))
+        # OwnerとBreederを先に保存
+        if owner_data:
+            cursor.execute("INSERT OR IGNORE INTO owners (owner_id, name) VALUES (?, ?)",
+                           (owner_data['owner_id'], owner_data['name']))
+        if breeder_data:
+            cursor.execute("INSERT OR IGNORE INTO breeders (breeder_id, name) VALUES (?, ?)",
+                           (breeder_data['breeder_id'], breeder_data['name']))
+
+        # 1. horsesテーブルに基本情報を保存
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO horses (horse_id, name, birth_date, sex, trainer_id, owner_id, breeder_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                horse_data.get('horse_id'), horse_data.get('name'), horse_data.get('birth_date'),
+                horse_data.get('sex'), horse_data.get('trainer_id'), horse_data.get('owner_id'),
+                horse_data.get('breeder_id')
+            )
+        )
+
+        # 2. pedigreesテーブルに血統情報を保存
+        if pedigree_list:
+            pedigree_insert_data = [
+                (horse_data['horse_id'], ancestor_id, generation, position)
+                for ancestor_id, generation, position in pedigree_list
+            ]
+            cursor.executemany(
+                "INSERT OR IGNORE INTO pedigrees (horse_id, ancestor_id, generation, position) VALUES (?, ?, ?, ?)",
+                pedigree_insert_data
+            )
+
         conn.commit()
-    except Exception as e:
+
+    except sqlite3.Error as e:
         print(f"DB Error: {e}")
+        traceback.print_exc()
     finally:
         conn.close()
 
-def scrape_missing_horses(driver):
+def scrape_missing_horses():
     ids = get_unscraped_horse_ids()
     print(f"Found {len(ids)} horses to scrape.")
     
-    for hid in tqdm(ids):
-        html = get_html_with_selenium(driver, hid)
-        if not html: continue
-        
-        soup = BeautifulSoup(html, 'lxml')
-        data = parse_horse_page(soup, hid)
-        
-        if data:
-            save_horse_to_db(data)
+    if not ids:
+        print("No new horses to scrape.")
+        return
+
+    for horse_id in tqdm(ids, desc="Scraping Horses"):
+        try:
+            # 1. プロフィールページの取得と解析
+            profile_url = f"{BASE_URL}{horse_id}/"
+            profile_html = get_html_from_jbis(profile_url)
+            if not profile_html:
+                print(f"Failed to fetch profile for {horse_id}. Skipping.")
+                continue
+            
+            profile_soup = BeautifulSoup(profile_html, 'lxml')
+            horse_data, owner_data, breeder_data = parse_horse_page(profile_soup, horse_id)
+            
+            if not horse_data:
+                print(f"Failed to parse profile for {horse_id}. Skipping.")
+                continue
+
+            # 2. 血統ページの取得と解析
+            pedigree_url = f"{BASE_URL}{horse_id}/pedigree/"
+            pedigree_html = get_html_from_jbis(pedigree_url)
+            if not pedigree_html:
+                print(f"Failed to fetch pedigree for {horse_id}. Skipping.")
+                continue
+            
+            pedigree_soup = BeautifulSoup(pedigree_html, 'lxml')
+            pedigree_list = parse_pedigree(pedigree_soup)
+
+            # 3. DBへの保存
+            save_horse_to_db(horse_data, owner_data, breeder_data, pedigree_list)
+            time.sleep(1) # サーバー負荷軽減
+
+        except Exception as e:
+            print(f"An unexpected error occurred for horse {horse_id}: {e}")
+            traceback.print_exc()
 
 if __name__ == "__main__":
-    print("Initializing Selenium Driver...")
-    driver = get_driver()
-    
-    try:
-        scrape_missing_horses(driver)
-        print("Scraping completed.")
-            
-    except Exception as e:
-        print(f"Error: {e}")
-        traceback.print_exc()
-    finally:
-        print("Closing driver...")
-        driver.quit()
+    scrape_missing_horses()
+    print("Scraping completed.")
