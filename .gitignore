@@ -6,3 +6,4 @@ __pycache__/
 *.db
 *.html
 騎手情報　JRA_files/*
+*.csv
