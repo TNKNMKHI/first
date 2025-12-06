@@ -21,7 +21,7 @@ DB_PATH = os.getenv('DB_FILE_PATH')
 if not DB_PATH:
     raise ValueError("DB_FILE_PATH is not set in .env file")
 
-BASE_URL = "https://www.jbis.or.jp/race/"
+BASE_URL = "https://www.jbis.or.jp/race/result/"
 
 def get_html_from_jbis_url(url):
     """指定されたURLからHTMLを取得する"""
@@ -45,48 +45,36 @@ def get_html_from_jbis_url(url):
 def parse_race_info(soup, race_id):
     """レース情報を解析して辞書で返す"""
     try:
-        # JBISのページ構造に合わせて解析
-        header = soup.select_one('div.header-inner')
-        if not header:
-            return None
+        race_info_box = soup.select_one('div.box-race__text')
+        if not race_info_box:
+            print(f"Could not find race info box for {race_id}")
+            return None # 基本情報がなければ解析不能
 
-        # 日付と競馬場
-        date_venue_text = header.select_one('h1.heading-level2-bold').text.strip()
-        date_match = re.search(r'(\d{4})年(\d{1,2})月(\d{1,2})日', date_venue_text)
-        date_str = f"{date_match.group(1)}-{int(date_match.group(2)):02d}-{int(date_match.group(3)):02d}" if date_match else ""
-        venue = date_venue_text.split(' ')[-1].strip()
-
-        # レース番号とレース名
-        race_title_elem = header.select_one('h2.heading-level2')
-        race_title_text = race_title_elem.text.strip()
-        round_match = re.search(r'(\d{1,2})R', race_title_text)
-        race_round = int(round_match.group(1)) if round_match else 0
-        race_name = race_title_elem.find(text=True, recursive=False).strip()
-        race_class_elem = race_title_elem.select_one('span.icon-grade')
-        race_class = race_class_elem.text.strip() if race_class_elem else ""
-
-        # レース条件
-        race_spec_text = soup.select_one('div.box-note-01').text.strip()
-        course_match = re.search(r'(芝|ダート|障害)\s*(左|右|直線)?\s*(\d+)m', race_spec_text)
+        # --- ページから取得できるレース条件 ---
+        # race_spec_text = race_info_box.text.strip()
+        race_spec_html = str(race_info_box)
+        
+        # コース、距離、回転
+        course_match = re.search(r'<b>(芝|ダ|障)\s*(\d+)m', race_spec_html, re.IGNORECASE)
         course_type, rotation, distance = "Unknown", "Unknown", 0
         if course_match:
-            course_type = course_match.group(1)
-            rotation = course_match.group(2) if course_match.group(2) else "直線" if "直線" in race_spec_text else "Unknown"
-            distance = int(course_match.group(3))
+            course_type_char = course_match.group(1)
+            course_type = {'芝': '芝', 'ダ': 'ダート', '障': '障害'}.get(course_type_char, 'Unknown')
+            distance = int(course_match.group(2))
+            # 回転方向は新しいレイアウトでは見当たらないため、"Unknown"のまま
 
-        weather_match = re.search(r'天候：(.*?)\s', race_spec_text)
+        # 天候
+        weather_match = re.search(r'天候：(.*?)\s', race_info_box.text)
         weather = weather_match.group(1).strip() if weather_match else ""
 
-        state_match = re.search(r'(芝|ダート)：(.*?)\s', race_spec_text)
-        state = state_match.group(2).strip() if state_match else ""
+        # 馬場状態
+        state_match = re.search(r'(?:芝|ダート)：(.*?)\s', race_info_box.text)
+        state = state_match.group(1).strip() if state_match else ""
 
         return {
             'race_id': race_id,
-            'date': date_str,
-            'venue': venue,
-            'race_name': race_name,
-            'race_class': race_class,
-            'race_round': race_round,
+            # 'date', 'venue', 'race_name', 'race_round', 'race_class' は
+            # 呼び出し元で設定される想定
             'course_type': course_type,
             'distance': distance,
             'rotation': rotation,
@@ -103,37 +91,45 @@ def parse_race_results(soup, race_id):
     """レース結果テーブルを解析して (results, jockeys, trainers) のタプルを返す"""
     results, jockeys, trainers = [], [], []
     try:
-        table = soup.select_one('table.table-data-01')
-        if not table:
+        results_container = soup.select_one('div.data-6-11') # e.g. <div class="data-6-11 sort-1">
+        if not results_container:
             return [], [], []
         
-        rows = table.select('tr')[1:] # ヘッダーを除く
-        for row in rows:
-            cols = row.select('td')
-            if len(cols) < 19: continue
+        # ヘッダー行(最初のdiv)を除き、結果行(divのリスト)を取得
+        result_rows = results_container.select('div.data-6-11 > div:not(:first-child)')
+        
+        for row in result_rows:
+            cols = row.find_all('div', recursive=False)
+            if len(cols) < 15: 
+                continue
             
             # 抽出処理
             rank_text = cols[0].text.strip()
             if not rank_text.isdigit(): continue
             rank = int(rank_text)
             
-            frame_no = int(cols[1].text.strip()) if cols[1].text.strip().isdigit() else 0
-            horse_no = int(cols[2].text.strip()) if cols[2].text.strip().isdigit() else 0
+            frame_no = int(cols[1].text.strip()) if cols[1].text.strip().isdigit() else 0 # 枠番
+            horse_no_text = cols[2].text.strip().replace('番', '')
+            horse_no = int(horse_no_text) if horse_no_text.isdigit() else 0 # 馬番
             
-            horse_a = cols[3].select_one('a')
+            horse_a = cols[3].select_one('a[href*="/horse/"]')
             horse_id = ""
             if horse_a and 'href' in horse_a.attrs:
                 horse_id_match = re.search(r'/horse/(\w+)/', horse_a['href'])
-                if horse_id_match:
-                    horse_id = horse_id_match.group(1)
+                horse_id = horse_id_match.group(1) if horse_id_match else ""
             
-            sex_age = cols[4].text.strip() # "牡3"
+            sex_age = cols[4].text.strip() # "牡2"
             age_match = re.search(r'\d+', sex_age)
             age = int(age_match.group()) if age_match else 0
-
-            weight = float(cols[5].text.strip()) if cols[5].text.strip() else 0.0
             
-            jockey_a = cols[6].select_one('a')
+            # 斤量
+            weight_raw_text = cols[5].select_one('span.ta-right').text.strip() if cols[5].select_one('span.ta-right') else ""
+            # '★50.0'のような文字列から数値部分のみを抽出
+            weight_match = re.search(r'(\d+\.?\d*)', weight_raw_text)
+            weight_text = weight_match.group(1) if weight_match else ""
+            weight = float(weight_text) if weight_text.replace('.', '', 1).isdigit() else 0.0
+            
+            jockey_a = cols[5].select_one('a[href*="/jockey/"]')
             jockey_id = ""
             jockey_name = ""
             if jockey_a:
@@ -143,42 +139,44 @@ def parse_race_results(soup, race_id):
                 if jockey_id:
                     jockeys.append({'jockey_id': jockey_id, 'name': jockey_name})
 
-            time_str = cols[7].text.strip() # "1:58.2"
+            time_str = cols[6].text.strip() # "1:08.9"
             try:
                 if ':' in time_str:
                     m, s = time_str.split(':')
                     time_seconds = int(m) * 60 + float(s)
                 else:
                     time_seconds = float(time_str)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 time_seconds = None
             
-            margin = cols[8].text.strip() # "クビ"
+            margin = cols[7].text.strip() # "---" or "クビ"
             
-            passing = cols[10].text.strip() # "2-2-2-2"
+            passing = cols[8].text.strip() # "1-1"
 
-            last_3f_text = cols[11].text.strip() # "34.6"
+            last_3f_text = cols[9].text.strip() # "35.1"
             try:
                 last_3f = float(last_3f_text)
             except (ValueError, TypeError):
                 last_3f = None
             
-            odds_text = cols[12].text.strip()
-            odds = float(odds_text) if odds_text else None
+            # スピード指数は cols[10]
 
-            pop_text = cols[13].text.strip()
+            pop_text = cols[11].text.strip().replace('人気', '')
             popularity = int(pop_text) if pop_text.isdigit() else None
+            # オッズは新しいレイアウトにはない
+            odds = None
 
-            weight_text = cols[14].text.strip() # "484(-2)"
-            hw_match = re.search(r'(\d+)\((.*?)\)', weight_text)
+            weight_text = cols[12].text.strip() # "508(0)"
+            hw_match = re.search(r'(\d+)', weight_text)
             horse_weight = int(hw_match.group(1)) if hw_match else None
-            weight_diff_str = hw_match.group(2) if hw_match else "0"
+            wd_match = re.search(r'\((\+?-?\d+)\)', weight_text)
+            weight_diff_str = wd_match.group(1) if wd_match else "0"
             try:
                 weight_diff = int(weight_diff_str)
-            except (ValueError, TypeError):
+            except ValueError:
                 weight_diff = 0
-
-            trainer_a = cols[15].select_one('a')
+            
+            trainer_a = cols[13].select_one('a[href*="/trainer/"]')
             trainer_id = ""
             trainer_name = ""
             if trainer_a:
@@ -188,8 +186,6 @@ def parse_race_results(soup, race_id):
                 if trainer_id:
                     trainers.append({'trainer_id': trainer_id, 'name': trainer_name})
 
-            weight_text = cols[14].text.strip()
-            hw_match = re.search(r'(\d+)\((.*?)\)', weight_text)
             results.append({
                 'race_id': race_id, 'horse_id': horse_id, 'rank': rank,
                 'frame_no': frame_no, 'horse_no': horse_no,
@@ -199,7 +195,6 @@ def parse_race_results(soup, race_id):
                 'odds': odds, 'popularity': popularity,
                 'horse_weight': horse_weight, 'weight_diff': weight_diff
             })
-            
     except Exception as e:
         print(f"Error parsing results for {race_id}: {e}")
         traceback.print_exc()
@@ -212,6 +207,12 @@ def save_to_db(race_info, results, jockeys, trainers):
     if not race_info or not results:
         return
     
+    # scraper_race.pyのメインループから渡される情報をrace_infoにマージ
+    # この関数が呼び出される前に、呼び出し元で設定されている想定
+    # race_info['date'] = date_str
+    # race_info['venue'] = venue
+    # ...
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -221,9 +222,9 @@ def save_to_db(race_info, results, jockeys, trainers):
         INSERT OR IGNORE INTO races (race_id, date, venue, race_name, race_class, race_round, course_type, distance, rotation, weather, state, entries)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            race_info['race_id'], race_info['date'], race_info['venue'], race_info['race_name'],
-            race_info['race_class'], race_info['race_round'], race_info['course_type'],
-            race_info['distance'], race_info['rotation'], race_info['weather'], race_info['state'],
+            race_info.get('race_id'), race_info.get('date'), race_info.get('venue'), race_info.get('race_name'),
+            race_info.get('race_class'), race_info.get('race_round'), race_info.get('course_type'),
+            race_info.get('distance'), race_info.get('rotation'), race_info.get('weather'), race_info.get('state'),
             len(results)
         ))
         
@@ -295,7 +296,8 @@ def construct_jbis_url(race_id, date_str):
         return None
 
     date_yyyymmdd = date_str.replace('-', '')
-    return f"{BASE_URL}{date_yyyymmdd}/{venue_code_jbis}/{race_num}.html"
+    
+    return f"{BASE_URL}{date_yyyymmdd}/{venue_code_jbis}/{race_num:02d}/"
 
 def scrape_year(year):
     """指定した年の全レースをスクレイピングする"""
@@ -339,6 +341,18 @@ def scrape_year(year):
                 print(f"Failed to parse race info for {race_id}. Skipping.")
                 continue
 
+            # --- netkeibaから取得した情報をrace_infoにマージ ---
+            # netkeibaのrace_idから情報を抽出
+            race_round = int(race_id[10:12])
+            # venueは別途変換が必要
+            venue_map_nk_to_name = {
+                '01': '札幌', '02': '函館', '03': '福島', '04': '新潟', '05': '東京',
+                '06': '中山', '07': '中京', '08': '京都', '09': '阪神', '10': '小倉'
+            }
+            race_info['date'] = date_str
+            race_info['race_round'] = race_round
+            race_info['venue'] = venue_map_nk_to_name.get(race_id[4:6], 'Unknown')
+
             results, jockeys, trainers = parse_race_results(soup, race_id)
             if not results:
                 print(f"No results found for {race_id}. Skipping.")
@@ -350,6 +364,45 @@ def scrape_year(year):
         except Exception as e:
             print(f"An unexpected error occurred for race {race_id}: {e}")
             traceback.print_exc()
+
+# if __name__ == "__main__":
+#     parser = argparse.ArgumentParser(description='Scrape race data from netkeiba')
+#     parser.add_argument('year', type=int, help='Year to scrape (e.g., 2023)')
+#     args = parser.parse_args()
+
+#     scrape_year(args.year)
+#     print("No new races to process.")
+
+
+#     for race_id, date_str in tqdm(race_id_date_pairs, desc=f"Scraping races for {year}"):
+#         try:
+#             url = construct_jbis_url(race_id, date_str)
+#             if not url:
+#                 print(f"Could not construct URL for race_id {race_id}. Skipping.")
+#                 continue
+
+#             html = get_html_from_jbis_url(url)
+#             if not html:
+#                 print(f"Failed to get HTML for {race_id} from {url}. Skipping.")
+#                 continue
+
+#             soup = BeautifulSoup(html, 'lxml')
+#             race_info = parse_race_info(soup, race_id)
+#             if not race_info:
+#                 print(f"Failed to parse race info for {race_id}. Skipping.")
+#                 continue
+
+#             results, jockeys, trainers = parse_race_results(soup, race_id)
+#             if not results:
+#                 print(f"No results found for {race_id}. Skipping.")
+#                 continue
+
+#             save_to_db(race_info, results, jockeys, trainers)
+#             time.sleep(1) # サーバーへの負荷を軽減するための待機
+
+#         except Exception as e:
+#             print(f"An unexpected error occurred for race {race_id}: {e}")
+#             traceback.print_exc()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Scrape race data from netkeiba')

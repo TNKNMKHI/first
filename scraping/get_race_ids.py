@@ -1,64 +1,33 @@
-import requests
 from bs4 import BeautifulSoup
 import time
 import re
 from tqdm import tqdm
 from datetime import datetime
 import argparse
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 NETKEIBA_BASE_URL = "https://race.netkeiba.com"
 
-def get_html(url, params=None, method='GET'):
-    """指定されたURLからHTMLを取得する"""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        response = requests.request(method, url, headers=headers, data=params)
-        response.raise_for_status()
-        response.encoding = response.apparent_encoding
-        return response.text
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching {url}: {e}")
-        return None
-
-def get_race_dates_from_netkeiba_calendar(year):
-    """netkeibaのカレンダーページから指定された年の全レース開催日リストを取得する"""
-    dates = set()
-    print(f"Fetching race dates for {year} from netkeiba calendar...")
-    for month in tqdm(range(1, 13), desc="Fetching calendar months"):
-        calendar_url = f"{NETKEIBA_BASE_URL}/top/calendar.html?year={year}&month={month}"
-        html = get_html(calendar_url)
-        if not html:
-            continue
-        
-        soup = BeautifulSoup(html, 'lxml')
-        
-        # 開催日が含まれるリンクを探す
-        for link in soup.select('a[href*="kaisai_date="]'):
-            match = re.search(r'kaisai_date=(\d{8})', link['href'])
-            if match:
-                dates.add(match.group(1))
-        time.sleep(0.5) # サーバー負荷軽減
-    return sorted(list(dates))
-
-def get_race_ids_for_date(date_str):
-    """指定された日付の全レースIDを取得する"""
-    race_list_url = f"{NETKEIBA_BASE_URL}/top/race_list.html?kaisai_date={date_str}"
-    html = get_html(race_list_url)
-    if not html:
-        return []
-
-    soup = BeautifulSoup(html, 'lxml')
-    race_links = soup.select('a[href*="/race/result.html?race_id="]')
+def get_driver():
+    """Selenium WebDriverを初期化して返す"""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    race_ids = []
-    for link in race_links:
-        match = re.search(r'race_id=(\d+)', link['href'])
-        if match:
-            race_ids.append(match.group(1))
-            
-    return race_ids
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
 
 def get_race_ids_for_year(year):
     """
@@ -68,20 +37,76 @@ def get_race_ids_for_year(year):
         list[tuple[str, str]]: [(race_id, 'YYYY-MM-DD'), ...]
     """
     all_races = []
-    race_dates = get_race_dates_from_netkeiba_calendar(year)
-    if not race_dates:
-        print(f"Could not fetch any race dates for {year} from netkeiba calendar.")
+    print(f"Fetching race IDs for {year} from netkeiba calendar using Selenium...")
+
+    driver = get_driver()
+    try:
+        # 初回アクセスでCookie同意バナーを処理
+        print("Accessing netkeiba to handle cookie consent...")
+        driver.get(NETKEIBA_BASE_URL)
+        # try:
+        #     # 10秒待機してCookie同意ボタンを探す
+        #     accept_button = WebDriverWait(driver, 10).until(
+        #         EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler"))
+        #     )
+        #     accept_button.click()
+        #     print("Cookie consent accepted.")
+        #     time.sleep(1) # クリック後の待機
+        # except TimeoutException:
+        #     print("Cookie consent banner not found or timed out, proceeding.")
+
+        for month in tqdm(range(1, 13), desc=f"Fetching calendar for {year}"):
+            calendar_url = f"{NETKEIBA_BASE_URL}/top/calendar.html?year={year}&month={month}"
+            driver.get(calendar_url)
+            try:
+                # ページの主要な要素(カレンダーセル)が表示されるまで最大10秒待機
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "td.RaceCellBox"))
+                )
+            except TimeoutException:
+                # この月にレースがなければタイムアウトするので、スキップする
+                print(f"No races found for {year}-{month:02d}, skipping.")
+                continue
+            html = driver.page_source # JS実行後のHTMLを取得
+            soup = BeautifulSoup(html, 'lxml')
+            
+            # 開催日が含まれるリンクをすべて取得
+            date_links = soup.select('a[href*="race_list.html?kaisai_date="]')
+            
+            for link in date_links:
+                date_match = re.search(r'kaisai_date=(\d{8})', link['href'])
+                if not date_match:
+                    continue
+                
+                date_yyyymmdd = date_match.group(1)
+                race_list_url = f"{NETKEIBA_BASE_URL}/top/race_list.html?kaisai_date={date_yyyymmdd}"
+                driver.get(race_list_url)
+                time.sleep(1) # ページ遷移を待つ
+                
+                # レース一覧ページからレースIDを抽出
+                list_html = driver.page_source
+                list_soup = BeautifulSoup(list_html, 'lxml')
+                
+                for race_link in list_soup.select('a[href*="/race/result.html?race_id="]'):
+                    race_id_match = re.search(r'race_id=(\d{12})', race_link['href'])
+                    if race_id_match:
+                        race_id = race_id_match.group(1)
+                        date_obj = datetime.strptime(date_yyyymmdd, '%Y%m%d')
+                        date_formatted = date_obj.strftime('%Y-%m-%d')
+                        all_races.append((race_id, date_formatted))
+
+            time.sleep(1) # 次の月へのリクエスト前に待機
+    finally:
+        driver.quit()
+
+    if not all_races:
+        print(f"No race IDs found for {year}.")
         return []
-    
-    print(f"Fetching race IDs for {len(race_dates)} days from netkeiba.com...")
-    for date_yyyymmdd in tqdm(race_dates, desc=f"Processing race days for {year}"):
-        race_ids = get_race_ids_for_date(date_yyyymmdd)
-        date_obj = datetime.strptime(date_yyyymmdd, '%Y%m%d')
-        date_formatted = date_obj.strftime('%Y-%m-%d')
-        for race_id in race_ids:
-            all_races.append((race_id, date_formatted))
-        time.sleep(1) # サーバー負荷軽減
-    return all_races
+
+    # 重複を除去してソート
+    unique_races = sorted(list(set(all_races)))
+
+    return unique_races
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Get race IDs and dates for a specific year from netkeiba.com.')
