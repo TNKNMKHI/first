@@ -262,15 +262,15 @@ def save_to_db(race_info, results, jockeys, trainers):
 import argparse
 # get_race_ids.pyから関数をインポート
 # この変更に伴い、get_race_ids.pyが直接実行されるだけでなく、
-# インポート可能な関数(例: get_race_ids_for_year)を提供する必要があります。
-try:
-    from get_race_ids import get_race_ids_for_year as fetch_race_ids_from_netkeiba
-except ImportError:
-    print("Error: Could not import 'get_race_ids_for_year' from get_race_ids.py.")
-    print("Please ensure get_race_ids.py exists and contains the function.")
-    # 依存関係が解決できない場合は、ダミー関数を定義してクラッシュを防ぐ
-    def fetch_race_ids_from_netkeiba(year):
-        return []
+# # インポート可能な関数(例: get_race_ids_for_year)を提供する必要があります。
+# try:
+#     from get_race_ids import get_race_ids_for_year as fetch_race_ids_from_netkeiba
+# except ImportError:
+#     print("Error: Could not import 'get_race_ids_for_year' from get_race_ids.py.")
+#     print("Please ensure get_race_ids.py exists and contains the function.")
+#     # 依存関係が解決できない場合は、ダミー関数を定義してクラッシュを防ぐ
+#     def fetch_race_ids_from_netkeiba(year):
+#         return []
 
 def get_existing_race_ids(year):
     """指定した年の既に保存されているレースIDのセットを返す"""
@@ -307,11 +307,21 @@ def scrape_year(year):
     existing_ids = get_existing_race_ids(year)
     print(f"Found {len(existing_ids)} existing races in DB. These will be skipped.")
 
-    # get_race_ids.pyからレースIDと日付のタプルリストを取得
-    race_id_date_pairs = fetch_race_ids_from_netkeiba(year)
-    if not race_id_date_pairs:
-        print("No race IDs found to scrape.")
-        return
+    # # get_race_ids.pyからレースIDと日付のタプルリストを取得
+    # race_id_date_pairs = fetch_race_ids_from_netkeiba(year)
+    # if not race_id_date_pairs:
+    #     print("No race IDs found to scrape.")
+    #     return
+
+    # csvからレースIDと日付のダブルリストを取得する
+    try:
+        csv_file_path = f"./scraping/race_ids_{year}.csv"
+        with open(csv_file_path, 'r', encoding='utf-8') as f:
+            df = pd.read_csv(f)
+            race_id_date_pairs = list(zip(df['race_id'], df['date']))
+    except Exception as e:
+        print(f"Error reading CSV file: {e}")
+        return  
         
     print(f"Found {len(race_id_date_pairs)} race IDs to scrape for {year}.")
 
