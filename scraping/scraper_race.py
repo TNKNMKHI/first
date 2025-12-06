@@ -315,9 +315,9 @@ def scrape_year(year):
 
     # csvからレースIDと日付のダブルリストを取得する
     try:
-        csv_file_path = f"./scraping/race_ids_{year}.csv"
+        csv_file_path = f"./scraping/race_csv/race_ids_{year}.csv"
         with open(csv_file_path, 'r', encoding='utf-8') as f:
-            df = pd.read_csv(f)
+            df = pd.read_csv(f, header=None, names=['race_id', 'date'], dtype={'race_id': str})
             race_id_date_pairs = list(zip(df['race_id'], df['date']))
     except Exception as e:
         print(f"Error reading CSV file: {e}")
