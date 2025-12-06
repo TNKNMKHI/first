@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 *.db
 *.html
+騎手情報　JRA_files/*

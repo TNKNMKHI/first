@@ -115,5 +115,10 @@ if __name__ == "__main__":
 
     race_id_date_pairs = get_race_ids_for_year(args.year)
     
-    for race_id, date_str in race_id_date_pairs:
-        print(f"{race_id},{date_str}")
+    # CSVファイルに保存
+    with open(f'race_ids_{args.year}.csv', 'w') as f:
+        for race_id, date_str in race_id_date_pairs:
+            f.write(f"{race_id},{date_str}\n")
+            print(f"{race_id},{date_str}")
+    
+    print(f"Saved {len(race_id_date_pairs)} race IDs to race_ids_{args.year}.csv.")
