@@ -11,6 +11,7 @@ from urllib3.exceptions import InsecureRequestWarning
 import os
 import datetime
 from dotenv import load_dotenv
+from get_html import get_html_from_jbis
 
 # SSL警告を抑制
 urllib3.disable_warnings(InsecureRequestWarning)
@@ -23,24 +24,6 @@ if not DB_PATH:
 
 BASE_URL = "https://www.jbis.or.jp/race/result/"
 
-def get_html_from_jbis_url(url):
-    """指定されたURLからHTMLを取得する"""
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        response = requests.get(url, headers=headers, verify=False, timeout=10)
-        response.raise_for_status()
-        response.encoding = response.apparent_encoding
-
-        if "該当するデータが見つかりませんでした" in response.text:
-            print(f"Page not found or no data for URL: {url}")
-            return None
-
-        return response.text
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching {url}: {e}")
-        return None
 
 def parse_race_info(soup, race_id):
     """レース情報を解析して辞書で返す"""
@@ -340,7 +323,7 @@ def scrape_year(year):
                 print(f"Could not construct URL for race_id {race_id}. Skipping.")
                 continue
 
-            html = get_html_from_jbis_url(url)
+            html = get_html_from_jbis(url)
             if not html:
                 print(f"Failed to get HTML for {race_id} from {url}. Skipping.")
                 continue
@@ -391,7 +374,7 @@ def scrape_year(year):
 #                 print(f"Could not construct URL for race_id {race_id}. Skipping.")
 #                 continue
 
-#             html = get_html_from_jbis_url(url)
+#             html = get_html_from_jbis(url)
 #             if not html:
 #                 print(f"Failed to get HTML for {race_id} from {url}. Skipping.")
 #                 continue
