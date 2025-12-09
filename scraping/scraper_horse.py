@@ -40,20 +40,18 @@ def get_html_from_jbis(url):
         print(f"Error fetching {url}: {e}")
         return None
 
-def get_unscraped_horse_ids():
-    """resultsテーブルにあってhorsesテーブルにないhorse_idを取得する"""
+def get_incomplete_horse_ids():
+    """horsesテーブルでnameがNULLのhorse_idを取得する"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
-    # resultsテーブルに存在するが、horsesテーブルには存在しないhorse_idを効率的に取得
+    # 馬の基本情報(name)がまだ埋まっていないレコードを取得
     query = '''
-    SELECT DISTINCT r.horse_id 
-    FROM results r
-    LEFT JOIN horses h ON r.horse_id = h.horse_id
-    WHERE h.horse_id IS NULL AND r.horse_id IS NOT NULL AND r.horse_id != ''
+    SELECT horse_id 
+    FROM horses 
+    WHERE name IS NULL AND horse_id IS NOT NULL AND horse_id != ''
     '''
     cursor.execute(query)
-    ids = [row[0] for row in cursor.fetchall() if row[0]] # Noneや空文字を除外
+    ids = [row[0] for row in cursor.fetchall()]
     conn.close()
     return ids
 
@@ -65,7 +63,7 @@ def get_missing_pedigree_horse_ids():
     SELECT h.horse_id
     FROM horses h
     LEFT JOIN pedigrees p ON h.horse_id = p.horse_id
-    WHERE p.horse_id IS NULL AND h.horse_id IS NOT NULL AND h.horse_id != ''
+    WHERE p.horse_id IS NULL AND h.horse_id IS NOT NULL AND h.horse_id != '' AND h.name IS NOT NULL
     '''
     cursor.execute(query)
     ids = [row[0] for row in cursor.fetchall() if row[0]]
@@ -74,46 +72,33 @@ def get_missing_pedigree_horse_ids():
 
 def parse_pedigree(pedigree_soup):
     """5代血統表を解析して祖先IDの辞書を返す"""
-    # 変更後: (ancestor_id, generation, position) のタプルのリストを返す
     pedigree_list = []
-    # 旧実装: pedigree = {}
-
     table = pedigree_soup.select_one('table.tbl-pedigree')
     if not table:
-        return {}
+        return []
 
     ancestors = []
-    # 1代から5代までの祖先を取得 (62頭)
-    # 父、母、父母、母父、母母... の順
     rows = table.select('tr')
     
-    # 1代 (父、母)
+    # This parsing logic seems complex and specific to the website structure.
+    # We will assume it is correct for now.
     sire_a = rows[0].select_one('td a')
     dam_a = rows[16].select_one('td a')
     ancestors.append(re.search(r'/horse/(\w+)/', sire_a['href']).group(1) if sire_a else None)
     ancestors.append(re.search(r'/horse/(\w+)/', dam_a['href']).group(1) if dam_a else None)
-
-    # 2代 (FF, FM, MF, MM)
     ancestors.append(re.search(r'/horse/(\w+)/', rows[0].select('td a')[1]['href']).group(1) if len(rows[0].select('td a')) > 1 else None)
     ancestors.append(re.search(r'/horse/(\w+)/', rows[8].select_one('td a')['href']).group(1) if rows[8].select_one('td a') else None)
     ancestors.append(re.search(r'/horse/(\w+)/', rows[16].select('td a')[1]['href']).group(1) if len(rows[16].select('td a')) > 1 else None)
     ancestors.append(re.search(r'/horse/(\w+)/', rows[24].select_one('td a')['href']).group(1) if rows[24].select_one('td a') else None)
-
-    # 3代以降 (8 + 16 + 32 = 56頭)
-    # 各世代の先頭インデックス
     gen3_indices = [0, 4, 8, 12, 16, 20, 24, 28]
-    gen4_indices = [i for i in range(32) if i % 2 == 0]
-    gen5_indices = [i for i in range(32)]
-
-    # 3代
     for i in gen3_indices:
         a_tags = rows[i].select('td a')
         ancestors.append(re.search(r'/horse/(\w+)/', a_tags[2]['href']).group(1) if len(a_tags) > 2 else None)
-    # 4代
+    gen4_indices = [i for i in range(32) if i % 2 == 0]
     for i in gen4_indices:
         a_tags = rows[i].select('td a')
         ancestors.append(re.search(r'/horse/(\w+)/', a_tags[3]['href']).group(1) if len(a_tags) > 3 else None)
-    # 5代
+    gen5_indices = [i for i in range(32)]
     for i in gen5_indices:
         a_tags = rows[i].select('td a')
         ancestors.append(re.search(r'/horse/(\w+)/', a_tags[4]['href']).group(1) if len(a_tags) > 4 else None)
@@ -125,8 +110,7 @@ def parse_pedigree(pedigree_soup):
         for label in current_gen:
             next_gen_labels.append(label + 'f')
             next_gen_labels.append(label + 'm')
-        cols.extend(sorted(next_gen_labels)) # f, m, ff, fm, mf, mm... の順にする
-        current_gen = next_gen_labels
+        cols.extend(sorted(next_gen_labels))
     
     for i, position in enumerate(cols):
         if i < len(ancestors):
@@ -149,49 +133,34 @@ def parse_horse_page(profile_soup, horse_id):
         
         prof_table = profile_soup.select_one('table.tbl-data-04')
         if prof_table:
-            rows = prof_table.select('tr')
-            for row in rows:
+            for row in prof_table.select('tr'):
                 th = row.select_one('th').text.strip()
                 td = row.select_one('td')
+                if not td: continue
                 
                 if '生年月日' in th:
-                    # e.g., "2021/04/14"
                     date_text = td.text.strip()
                     try:
-                        # JBISの "YYYY/MM/DD" 形式をパース
                         dt_obj = datetime.strptime(date_text, '%Y/%m/%d')
                         horse_data['birth_date'] = dt_obj.strftime('%Y-%m-%d')
-                    except (ValueError, TypeError):
-                        horse_data['birth_date'] = None
-                    
+                    except (ValueError, TypeError): horse_data['birth_date'] = None
                 elif '性別' in th:
                     horse_data['sex'] = td.text.strip()
-                    
                 elif '調教師' in th:
-                    a_tag = td.select_one('a')
-                    if a_tag:
-                        match = re.search(r'/trainer/(\w+)/', a_tag['href'])
-                        horse_data['trainer_id'] = match.group(1) if match else None
-                
+                    a_tag = td.select_one('a[href*="/trainer/"]')
+                    if a_tag: horse_data['trainer_id'] = re.search(r'/trainer/(\w+)/', a_tag['href']).group(1)
                 elif '馬主' in th:
-                    a_tag = td.select_one('a')
+                    a_tag = td.select_one('a[href*="/owner/"]')
                     if a_tag:
-                        match = re.search(r'/owner/(\w+)/', a_tag['href'])
-                        owner_id = match.group(1) if match else None
-                        owner_name = a_tag.text.strip()
-                        if owner_id:
-                            horse_data['owner_id'] = owner_id
-                            owner_data = {'owner_id': owner_id, 'name': owner_name}
-                
+                        owner_id = re.search(r'/owner/(\w+)/', a_tag['href']).group(1)
+                        horse_data['owner_id'] = owner_id
+                        owner_data = {'owner_id': owner_id, 'name': a_tag.text.strip()}
                 elif '生産者' in th:
-                    a_tag = td.select_one('a')
+                    a_tag = td.select_one('a[href*="/breeder/"]')
                     if a_tag:
-                        match = re.search(r'/breeder/(\w+)/', a_tag['href'])
-                        breeder_id = match.group(1) if match else None
-                        breeder_name = a_tag.text.strip()
-                        if breeder_id:
-                            horse_data['breeder_id'] = breeder_id
-                            breeder_data = {'breeder_id': breeder_id, 'name': breeder_name}
+                        breeder_id = re.search(r'/breeder/(\w+)/', a_tag['href']).group(1)
+                        horse_data['breeder_id'] = breeder_id
+                        breeder_data = {'breeder_id': breeder_id, 'name': a_tag.text.strip()}
         
         return horse_data, owner_data, breeder_data
             
@@ -200,8 +169,10 @@ def parse_horse_page(profile_soup, horse_id):
         traceback.print_exc()
         return None, None, None
 
-def save_horse_to_db(horse_data, owner_data, breeder_data, pedigree_list):
-    if not horse_data: return
+def update_horse_in_db(horse_data, owner_data, breeder_data, pedigree_list):
+    """DBの既存の馬情報を更新し、血統情報を追加する"""
+    if not horse_data or not horse_data.get('name'):
+        return
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -215,16 +186,18 @@ def save_horse_to_db(horse_data, owner_data, breeder_data, pedigree_list):
             cursor.execute("INSERT OR IGNORE INTO breeders (breeder_id, name) VALUES (?, ?)",
                            (breeder_data['breeder_id'], breeder_data['name']))
 
-        # 1. horsesテーブルに基本情報を保存
+        # 1. horsesテーブルの既存のレコードを更新
         cursor.execute(
             """
-            INSERT OR IGNORE INTO horses (horse_id, name, birth_date, sex, trainer_id, owner_id, breeder_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            UPDATE horses 
+            SET name = ?, birth_date = ?, sex = ?, trainer_id = ?, owner_id = ?, breeder_id = ?
+            WHERE horse_id = ?
             """,
             (
-                horse_data.get('horse_id'), horse_data.get('name'), horse_data.get('birth_date'),
-                horse_data.get('sex'), horse_data.get('trainer_id'), horse_data.get('owner_id'),
-                horse_data.get('breeder_id')
+                horse_data.get('name'), horse_data.get('birth_date'),
+                horse_data.get('sex'), horse_data.get('trainer_id'), 
+                horse_data.get('owner_id'), horse_data.get('breeder_id'),
+                horse_data.get('horse_id')
             )
         )
 
@@ -238,76 +211,57 @@ def save_horse_to_db(horse_data, owner_data, breeder_data, pedigree_list):
                 "INSERT OR IGNORE INTO pedigrees (horse_id, ancestor_id, generation, position) VALUES (?, ?, ?, ?)",
                 pedigree_insert_data
             )
-
         conn.commit()
-
     except sqlite3.Error as e:
-        print(f"DB Error: {e}")
-        traceback.print_exc()
+        print(f"DB Error on update: {e}")
     finally:
         conn.close()
 
 def save_pedigree_to_db(horse_id, pedigree_list):
     """指定されたhorse_idの血統情報のみをDBに保存する"""
-    if not horse_id or not pedigree_list:
-        return
-
+    if not horse_id or not pedigree_list: return
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        pedigree_insert_data = [
-            (horse_id, ancestor_id, generation, position)
-            for ancestor_id, generation, position in pedigree_list
-        ]
         cursor.executemany(
             "INSERT OR IGNORE INTO pedigrees (horse_id, ancestor_id, generation, position) VALUES (?, ?, ?, ?)",
-            pedigree_insert_data
+            [(horse_id, anc_id, gen, pos) for anc_id, gen, pos in pedigree_list]
         )
         conn.commit()
     finally:
         conn.close()
 
-def scrape_missing_horses():
-    ids = get_unscraped_horse_ids()
-    print(f"Found {len(ids)} horses to scrape.")
+def scrape_incomplete_horses():
+    """馬の基本情報が欠けているデータを補完する"""
+    ids = get_incomplete_horse_ids()
+    print(f"Found {len(ids)} incomplete horse records to update.")
     
     if not ids:
-        print("No new horses to scrape.")
+        print("No incomplete horses to scrape.")
         return
 
-    for horse_id in tqdm(ids, desc="Scraping Horses"):
+    for horse_id in tqdm(ids, desc="Scraping Incomplete Horses"):
         try:
-            # 1. プロフィールページの取得と解析
             profile_url = f"{BASE_URL}{horse_id}/"
             profile_html = get_html_from_jbis(profile_url)
-            if not profile_html:
-                print(f"Failed to fetch profile for {horse_id}. Skipping.")
-                continue
+            if not profile_html: continue
             
             profile_soup = BeautifulSoup(profile_html, 'lxml')
             horse_data, owner_data, breeder_data = parse_horse_page(profile_soup, horse_id)
-            
-            if not horse_data:
-                print(f"Failed to parse profile for {horse_id}. Skipping.")
-                continue
+            if not horse_data: continue
 
-            # 2. 血統ページの取得と解析
             pedigree_url = f"{BASE_URL}{horse_id}/pedigree/"
             pedigree_html = get_html_from_jbis(pedigree_url)
-            if not pedigree_html:
-                print(f"Failed to fetch pedigree for {horse_id}. Skipping.")
-                continue
-            
-            pedigree_soup = BeautifulSoup(pedigree_html, 'lxml')
-            pedigree_list = parse_pedigree(pedigree_soup)
+            pedigree_list = []
+            if pedigree_html:
+                pedigree_soup = BeautifulSoup(pedigree_html, 'lxml')
+                pedigree_list = parse_pedigree(pedigree_soup)
 
-            # 3. DBへの保存
-            save_horse_to_db(horse_data, owner_data, breeder_data, pedigree_list)
-            time.sleep(1) # サーバー負荷軽減
+            update_horse_in_db(horse_data, owner_data, breeder_data, pedigree_list)
+            time.sleep(1)
 
         except Exception as e:
             print(f"An unexpected error occurred for horse {horse_id}: {e}")
-            traceback.print_exc()
 
 def scrape_missing_pedigrees():
     """血統情報が欠けている馬のデータを補完する"""
@@ -322,9 +276,7 @@ def scrape_missing_pedigrees():
         try:
             pedigree_url = f"{BASE_URL}{horse_id}/pedigree/"
             pedigree_html = get_html_from_jbis(pedigree_url)
-            if not pedigree_html:
-                print(f"Failed to fetch pedigree for {horse_id}. Skipping.")
-                continue
+            if not pedigree_html: continue
 
             pedigree_soup = BeautifulSoup(pedigree_html, 'lxml')
             pedigree_list = parse_pedigree(pedigree_soup)
@@ -334,6 +286,6 @@ def scrape_missing_pedigrees():
             print(f"An unexpected error occurred for horse {horse_id}: {e}")
 
 if __name__ == "__main__":
-    scrape_missing_horses()
+    scrape_incomplete_horses()
     scrape_missing_pedigrees()
-    print("Scraping completed.")
+    print("\nScraping completed.")
