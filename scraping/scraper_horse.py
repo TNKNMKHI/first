@@ -45,15 +45,30 @@ def get_unscraped_horse_ids():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # resultsにある全horse_id - horsesにある全horse_id
+    # resultsテーブルに存在するが、horsesテーブルには存在しないhorse_idを効率的に取得
     query = '''
     SELECT DISTINCT r.horse_id 
     FROM results r
     LEFT JOIN horses h ON r.horse_id = h.horse_id
-    WHERE h.horse_id IS NULL
+    WHERE h.horse_id IS NULL AND r.horse_id IS NOT NULL AND r.horse_id != ''
     '''
     cursor.execute(query)
     ids = [row[0] for row in cursor.fetchall() if row[0]] # Noneや空文字を除外
+    conn.close()
+    return ids
+
+def get_missing_pedigree_horse_ids():
+    """horsesテーブルに存在するが、pedigreesテーブルにデータがない馬のIDを取得する"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    query = '''
+    SELECT h.horse_id
+    FROM horses h
+    LEFT JOIN pedigrees p ON h.horse_id = p.horse_id
+    WHERE p.horse_id IS NULL AND h.horse_id IS NOT NULL AND h.horse_id != ''
+    '''
+    cursor.execute(query)
+    ids = [row[0] for row in cursor.fetchall() if row[0]]
     conn.close()
     return ids
 
@@ -232,6 +247,26 @@ def save_horse_to_db(horse_data, owner_data, breeder_data, pedigree_list):
     finally:
         conn.close()
 
+def save_pedigree_to_db(horse_id, pedigree_list):
+    """指定されたhorse_idの血統情報のみをDBに保存する"""
+    if not horse_id or not pedigree_list:
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        pedigree_insert_data = [
+            (horse_id, ancestor_id, generation, position)
+            for ancestor_id, generation, position in pedigree_list
+        ]
+        cursor.executemany(
+            "INSERT OR IGNORE INTO pedigrees (horse_id, ancestor_id, generation, position) VALUES (?, ?, ?, ?)",
+            pedigree_insert_data
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 def scrape_missing_horses():
     ids = get_unscraped_horse_ids()
     print(f"Found {len(ids)} horses to scrape.")
@@ -274,6 +309,31 @@ def scrape_missing_horses():
             print(f"An unexpected error occurred for horse {horse_id}: {e}")
             traceback.print_exc()
 
+def scrape_missing_pedigrees():
+    """血統情報が欠けている馬のデータを補完する"""
+    ids = get_missing_pedigree_horse_ids()
+    print(f"\nFound {len(ids)} horses with missing pedigrees to update.")
+
+    if not ids:
+        print("No missing pedigrees to scrape.")
+        return
+
+    for horse_id in tqdm(ids, desc="Scraping Missing Pedigrees"):
+        try:
+            pedigree_url = f"{BASE_URL}{horse_id}/pedigree/"
+            pedigree_html = get_html_from_jbis(pedigree_url)
+            if not pedigree_html:
+                print(f"Failed to fetch pedigree for {horse_id}. Skipping.")
+                continue
+
+            pedigree_soup = BeautifulSoup(pedigree_html, 'lxml')
+            pedigree_list = parse_pedigree(pedigree_soup)
+            save_pedigree_to_db(horse_id, pedigree_list)
+            time.sleep(1)
+        except Exception as e:
+            print(f"An unexpected error occurred for horse {horse_id}: {e}")
+
 if __name__ == "__main__":
     scrape_missing_horses()
+    scrape_missing_pedigrees()
     print("Scraping completed.")
