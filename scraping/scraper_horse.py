@@ -41,14 +41,14 @@ def get_html_from_jbis(url):
         return None
 
 def get_incomplete_horse_ids():
-    """horsesテーブルでnameがNULLのhorse_idを取得する"""
+    """horsesテーブルでnameがNULLまたは空文字のhorse_idを取得する"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     # 馬の基本情報(name)がまだ埋まっていないレコードを取得
     query = '''
     SELECT horse_id 
     FROM horses 
-    WHERE name IS NULL AND horse_id IS NOT NULL AND horse_id != ''
+    WHERE (name IS NULL OR name = '') AND horse_id IS NOT NULL AND horse_id != ''
     '''
     cursor.execute(query)
     ids = [row[0] for row in cursor.fetchall()]
@@ -63,7 +63,7 @@ def get_missing_pedigree_horse_ids():
     SELECT h.horse_id
     FROM horses h
     LEFT JOIN pedigrees p ON h.horse_id = p.horse_id
-    WHERE p.horse_id IS NULL AND h.horse_id IS NOT NULL AND h.horse_id != '' AND h.name IS NOT NULL
+    WHERE p.horse_id IS NULL AND h.horse_id IS NOT NULL AND h.horse_id != '' AND h.name IS NOT NULL AND h.name != ''
     '''
     cursor.execute(query)
     ids = [row[0] for row in cursor.fetchall() if row[0]]
